@@ -67,6 +67,24 @@ const getVersionChangeType = (
 	}
 };
 
+// Helper function to pad strings for table alignment
+const padString = (
+	str: string,
+	length: number,
+	align: "left" | "right" = "left",
+): string => {
+	if (align === "right") {
+		return str.padStart(length);
+	}
+	return str.padEnd(length);
+};
+
+// Helper function to truncate long package names
+const truncatePackageName = (name: string, maxLength: number): string => {
+	if (name.length <= maxLength) return name;
+	return `${name.substring(0, maxLength - 3)}...`;
+};
+
 const App: React.FC = () => {
 	const [projects, setProjects] = useState<ProjectInfo[]>([]);
 	const [selectedProjectIndex, setSelectedProjectIndex] = useState(0);
@@ -282,7 +300,9 @@ const App: React.FC = () => {
 	if (loading) {
 		return (
 			<Box flexDirection="column" padding={1}>
-				<Text color="blue">🔍 Scanning for Python projects...</Text>
+				<Text color="cyan" bold>
+					🔍 Scanning for Python projects...
+				</Text>
 			</Box>
 		);
 	}
@@ -290,8 +310,8 @@ const App: React.FC = () => {
 	if (projects.length === 0) {
 		return (
 			<Box flexDirection="column" padding={1}>
-				<Text color="red">
-					❌ No pyproject.toml files found in current directory
+				<Text color="red" bold>
+					❌ No pyproject.toml files found
 				</Text>
 				<Text color="gray">
 					Make sure you're in a directory containing Python projects
@@ -303,41 +323,56 @@ const App: React.FC = () => {
 	if (mode === "project") {
 		return (
 			<Box flexDirection="column" padding={1}>
-				<Text color="green" bold>
-					🐍 UV-UP - Python Dependency Updater
-				</Text>
-				<Text color="gray">Select a project to update:</Text>
-				<Text></Text>
+				<Box marginBottom={1}>
+					<Text color="magenta" bold>
+						🐍 UV-UP
+					</Text>
+					<Text color="gray"> - Python Dependency Updater</Text>
+				</Box>
+
+				<Box marginBottom={1}>
+					<Text color="white" bold>
+						Select a project:
+					</Text>
+				</Box>
 
 				{projects.map((project, index) => {
 					const updatesAvailable = project.dependencies.filter(
 						(dep) => dep.hasUpdate,
 					).length;
 					const stillLoading = project.dependencies.some((dep) => dep.loading);
+					const isSelected = index === selectedProjectIndex;
 
 					return (
-						<Box key={project.filePath} marginLeft={2}>
-							<Text color={index === selectedProjectIndex ? "blue" : "white"}>
-								{index === selectedProjectIndex ? "▶ " : "  "}
-								{project.name} ({project.dependencies.length} dependencies
-								{stillLoading ? (
-									<Text color="gray"> - checking...</Text>
-								) : updatesAvailable > 0 ? (
-									<Text color="green">
-										{" "}
-										- {updatesAvailable} updates available
-									</Text>
-								) : (
-									<Text color="gray"> - up to date</Text>
-								)}
-								)
+						<Box key={project.filePath} marginLeft={1} marginBottom={0}>
+							<Text color={isSelected ? "cyan" : "white"} bold={isSelected}>
+								{isSelected ? "▶ " : "  "}
+								{project.name}
 							</Text>
+							<Text color="gray"> ({project.dependencies.length} deps</Text>
+							{stillLoading ? (
+								<Text color="yellow"> • checking...</Text>
+							) : updatesAvailable > 0 ? (
+								<Text color="green" bold>
+									{" "}
+									• {updatesAvailable} updates available
+								</Text>
+							) : (
+								<Text color="gray"> • up to date</Text>
+							)}
+							<Text color="gray">)</Text>
 						</Box>
 					);
 				})}
 
-				<Text></Text>
-				<Text color="gray">Use ↑↓ to navigate, Enter to select, q to quit</Text>
+				<Box
+					marginTop={1}
+					paddingTop={1}
+					borderStyle="single"
+					borderColor="gray"
+				>
+					<Text color="gray">↑↓ navigate • Enter select • q quit</Text>
+				</Box>
 			</Box>
 		);
 	}
@@ -346,49 +381,124 @@ const App: React.FC = () => {
 		const currentProject = projects[selectedProjectIndex];
 		if (!currentProject) return null;
 
+		// Calculate column widths based on content
+		const maxNameLength = Math.min(
+			Math.max(...currentProject.dependencies.map((d) => d.name.length), 8),
+			25, // Cap at 25 chars
+		);
+		const maxCurrentLength = Math.max(
+			...currentProject.dependencies.map((d) => d.currentVersion.length),
+			7, // "Current" header length
+		);
+		const maxLatestLength = Math.max(
+			...currentProject.dependencies.map((d) => d.latestVersion?.length || 0),
+			6, // "Latest" header length
+		);
+
+		const selectedCount = currentProject.dependencies.filter(
+			(d) => d.selected,
+		).length;
+
 		return (
 			<Box flexDirection="column" padding={1}>
-				<Text color="green" bold>
-					📦 {currentProject.name}
-				</Text>
-				<Text color="gray">Select dependencies to update:</Text>
-				<Text></Text>
+				<Box marginBottom={1}>
+					<Text color="cyan" bold>
+						📦 {currentProject.name}
+					</Text>
+					{selectedCount > 0 && (
+						<Text color="green"> ({selectedCount} selected)</Text>
+					)}
+				</Box>
 
-				{currentProject.dependencies.map((dep, index) => (
-					<Box key={`${dep.name}-${index}`} marginLeft={2}>
-						<Text color={index === selectedDepIndex ? "blue" : "white"}>
-							{index === selectedDepIndex ? "▶ " : "  "}
-							{dep.selected ? "✓ " : "☐ "}
-							{dep.name}
-							{dep.loading ? (
-								<Text color="gray"> (checking...)</Text>
-							) : dep.latestVersion ? (
-								<Text>
-									<Text color="gray"> ({dep.currentVersion}</Text>
-									{dep.hasUpdate ? (
-										(() => {
-											const changeType = getVersionChangeType(
-												dep.currentVersion,
-												dep.latestVersion,
-											);
-											const color = changeType === "major" ? "red" : "green";
-											return <Text color={color}> → {dep.latestVersion}</Text>;
-										})()
-									) : (
-										<Text color="gray"> ✓)</Text>
-									)}
+				{/* Table Header */}
+				<Box marginBottom={1}>
+					<Text color="white" bold>
+						{padString("", 4)}{" "}
+						{/* Space for selection indicator and checkbox */}
+						{padString("Package", maxNameLength)} {/* Separator */}
+						{padString("Current", maxCurrentLength)} {/* Separator */}
+						{padString("Latest", maxLatestLength)} {/* Separator */}
+						Status
+					</Text>
+					<Text color="gray">
+						{padString(
+							"",
+							4 +
+								maxNameLength +
+								1 +
+								maxCurrentLength +
+								1 +
+								maxLatestLength +
+								1,
+						)}
+						{"─".repeat(20)}
+					</Text>
+				</Box>
+
+				{/* Table Rows */}
+				{currentProject.dependencies.map((dep, index) => {
+					const isSelected = index === selectedDepIndex;
+					const truncatedName = truncatePackageName(dep.name, maxNameLength);
+
+					let statusText = "";
+					let statusColor = "gray";
+
+					if (dep.loading) {
+						statusText = "Checking...";
+						statusColor = "yellow";
+					} else if (!dep.latestVersion) {
+						statusText = "Not found";
+						statusColor = "red";
+					} else if (dep.hasUpdate) {
+						const changeType = getVersionChangeType(
+							dep.currentVersion,
+							dep.latestVersion,
+						);
+						statusText = changeType.toUpperCase();
+						statusColor =
+							changeType === "major"
+								? "red"
+								: changeType === "minor"
+									? "yellow"
+									: "green";
+					} else {
+						statusText = "Up to date";
+						statusColor = "green";
+					}
+
+					return (
+						<Box key={`${dep.name}-${index}`} marginBottom={0}>
+							<Text
+								color={isSelected ? "cyan" : "white"}
+								backgroundColor={isSelected ? "blue" : undefined}
+							>
+								{isSelected ? "▶ " : "  "}
+								{dep.selected ? "✓ " : "☐ "}
+								{padString(truncatedName, maxNameLength)}{" "}
+								<Text color="gray">
+									{padString(dep.currentVersion, maxCurrentLength)}
+								</Text>{" "}
+								<Text color={dep.hasUpdate ? "green" : "gray"}>
+									{padString(dep.latestVersion || "─", maxLatestLength)}
+								</Text>{" "}
+								<Text color={statusColor} bold={dep.hasUpdate}>
+									{statusText}
 								</Text>
-							) : (
-								<Text color="red"> (not found)</Text>
-							)}
-						</Text>
-					</Box>
-				))}
+							</Text>
+						</Box>
+					);
+				})}
 
-				<Text></Text>
-				<Text color="gray">
-					Use ↑↓ to navigate, Space to select, Enter to continue, ← to go back
-				</Text>
+				<Box
+					marginTop={1}
+					paddingTop={1}
+					borderStyle="single"
+					borderColor="gray"
+				>
+					<Text color="gray">
+						↑↓ navigate • Space select • Enter continue • ← back • q quit
+					</Text>
+				</Box>
 			</Box>
 		);
 	}
@@ -403,33 +513,64 @@ const App: React.FC = () => {
 
 		return (
 			<Box flexDirection="column" padding={1}>
-				<Text color="yellow" bold>
-					⚠️ Confirm Updates
-				</Text>
-				<Text>
-					About to update {selectedDeps.length} dependencies in{" "}
-					{currentProject.name}:
-				</Text>
-				<Text></Text>
+				<Box marginBottom={1}>
+					<Text color="yellow" bold>
+						⚠️ Confirm Updates
+					</Text>
+				</Box>
 
-				{selectedDeps.map((dep, index) => {
-					const changeType = dep.latestVersion
-						? getVersionChangeType(dep.currentVersion, dep.latestVersion)
-						: "minor";
-					const color = changeType === "major" ? "red" : "cyan";
+				<Box marginBottom={1}>
+					<Text>
+						About to update{" "}
+						<Text color="cyan" bold>
+							{selectedDeps.length}
+						</Text>{" "}
+						dependencies in{" "}
+						<Text color="cyan" bold>
+							{currentProject.name}
+						</Text>
+						:
+					</Text>
+				</Box>
 
-					return (
-						<Box key={`${dep.name}-confirm-${index}`} marginLeft={2}>
-							<Text color={color}>
-								• {dep.name}: {dep.currentVersion} →{" "}
-								{dep.latestVersion || "unknown"}
-							</Text>
-						</Box>
-					);
-				})}
+				<Box marginBottom={1}>
+					{selectedDeps.map((dep, index) => {
+						const changeType = dep.latestVersion
+							? getVersionChangeType(dep.currentVersion, dep.latestVersion)
+							: "minor";
+						const badgeColor =
+							changeType === "major"
+								? "red"
+								: changeType === "minor"
+									? "yellow"
+									: "green";
 
-				<Text></Text>
-				<Text color="gray">Continue? (y/n)</Text>
+						return (
+							<Box
+								key={`${dep.name}-confirm-${index}`}
+								marginLeft={2}
+								marginBottom={0}
+							>
+								<Text color="white">• {padString(dep.name, 20)}</Text>
+								<Text color="gray">{dep.currentVersion} →</Text>
+								<Text color="green" bold>
+									{" "}
+									{dep.latestVersion || "unknown"}
+								</Text>
+								<Text color={badgeColor} bold>
+									{" "}
+									[{changeType.toUpperCase()}]
+								</Text>
+							</Box>
+						);
+					})}
+				</Box>
+
+				<Box borderStyle="single" borderColor="yellow" padding={1}>
+					<Text color="yellow" bold>
+						Continue with updates? (y/n)
+					</Text>
+				</Box>
 			</Box>
 		);
 	}
