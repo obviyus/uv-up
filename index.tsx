@@ -511,6 +511,20 @@ const App: React.FC = () => {
 			(dep) => dep.selected,
 		);
 
+		// Calculate column widths based on selected dependencies
+		const maxNameLength = Math.min(
+			Math.max(...selectedDeps.map((d) => d.name.length), 8),
+			25, // Cap at 25 chars
+		);
+		const maxCurrentLength = Math.max(
+			...selectedDeps.map((d) => d.currentVersion.length),
+			7, // "Current" header length
+		);
+		const maxLatestLength = Math.max(
+			...selectedDeps.map((d) => d.latestVersion?.length || 0),
+			6, // "Latest" header length
+		);
+
 		return (
 			<Box flexDirection="column" padding={1}>
 				<Box marginBottom={1}>
@@ -521,50 +535,58 @@ const App: React.FC = () => {
 
 				<Box marginBottom={1}>
 					<Text>
-						About to update{" "}
-						<Text color="cyan" bold>
-							{selectedDeps.length}
-						</Text>{" "}
-						dependencies in{" "}
-						<Text color="cyan" bold>
-							{currentProject.name}
-						</Text>
-						:
+						About to update {selectedDeps.length} dependencies in{" "}
+						{currentProject.name}:
 					</Text>
 				</Box>
 
+				{/* Table Header */}
 				<Box marginBottom={1}>
-					{selectedDeps.map((dep, index) => {
-						const changeType = dep.latestVersion
-							? getVersionChangeType(dep.currentVersion, dep.latestVersion)
-							: "minor";
-						const badgeColor =
-							changeType === "major"
-								? "red"
-								: changeType === "minor"
-									? "yellow"
-									: "green";
-
-						return (
-							<Box
-								key={`${dep.name}-confirm-${index}`}
-								marginLeft={2}
-								marginBottom={0}
-							>
-								<Text color="white">• {padString(dep.name, 20)}</Text>
-								<Text color="gray">{dep.currentVersion} →</Text>
-								<Text color="green" bold>
-									{" "}
-									{dep.latestVersion || "unknown"}
-								</Text>
-								<Text color={badgeColor} bold>
-									{" "}
-									[{changeType.toUpperCase()}]
-								</Text>
-							</Box>
-						);
-					})}
+					<Text color="white" bold>
+						{padString("Package", maxNameLength)} {/* Separator */}
+						{padString("Current", maxCurrentLength)} {/* Separator */}
+						{padString("Latest", maxLatestLength)} {/* Separator */}
+						Change Type
+					</Text>
+					<Text color="gray">
+						{padString(
+							"",
+							maxNameLength + 1 + maxCurrentLength + 1 + maxLatestLength + 1,
+						)}
+						{"─".repeat(15)}
+					</Text>
 				</Box>
+
+				{/* Table Rows */}
+				{selectedDeps.map((dep, index) => {
+					const changeType = dep.latestVersion
+						? getVersionChangeType(dep.currentVersion, dep.latestVersion)
+						: "minor";
+					const badgeColor =
+						changeType === "major"
+							? "red"
+							: changeType === "minor"
+								? "yellow"
+								: "green";
+					const truncatedName = truncatePackageName(dep.name, maxNameLength);
+
+					return (
+						<Box key={`${dep.name}-confirm-${index}`} marginBottom={0}>
+							<Text color="white">
+								{padString(truncatedName, maxNameLength)}{" "}
+								{padString(dep.currentVersion, maxCurrentLength)}{" "}
+								<Text color="green" bold>
+									{padString(dep.latestVersion || "unknown", maxLatestLength)}
+								</Text>{" "}
+								<Text color={badgeColor} bold>
+									{changeType.toUpperCase()}
+								</Text>
+							</Text>
+						</Box>
+					);
+				})}
+
+				<Box marginBottom={1}></Box>
 
 				<Box borderStyle="single" borderColor="yellow" padding={1}>
 					<Text color="yellow" bold>
