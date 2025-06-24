@@ -1,7 +1,7 @@
-#!/usr/bin/env bun
-import React, { useState, useEffect, useCallback } from "react";
-import { render, Text, Box, useInput, useApp } from "ink";
 import { readdir } from "node:fs/promises";
+import { Box, render, Text, useApp, useInput } from "ink";
+import type React from "react";
+import { useCallback, useEffect, useState } from "react";
 
 interface Dependency {
 	name: string;
@@ -27,7 +27,7 @@ const fetchLatestVersion = async (
 
 		const data: any = await response.json();
 		return data.info?.version || null;
-	} catch (error) {
+	} catch (_error) {
 		return null;
 	}
 };
@@ -151,9 +151,7 @@ const App: React.FC = () => {
 						const deps: Dependency[] = toml.default.project.dependencies.map(
 							(dep: string) => {
 								// Parse package name, removing extras in square brackets
-								const match = dep.match(
-									/^([^>=<~!\[]+)(\[.*?\])?([>=<~!].+)?$/,
-								);
+								const match = dep.match(/^([^>=<~![]+)(\[.*?\])?([>=<~!].+)?$/);
 								const name = match?.[1]?.trim() || dep;
 								const version = match?.[3]?.replace(/[>=<~!]/, "") || "latest";
 
@@ -174,7 +172,7 @@ const App: React.FC = () => {
 							filePath: file,
 						});
 					}
-				} catch (err) {
+				} catch (_err) {
 					// Skip files that can't be parsed
 				}
 			}
@@ -184,7 +182,7 @@ const App: React.FC = () => {
 
 			// Fetch version information for all dependencies
 			fetchVersionsForAllProjects(projectsData);
-		} catch (error) {
+		} catch (_error) {
 			setLoading(false);
 		}
 	}, [fetchVersionsForAllProjects]);
