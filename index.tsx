@@ -5,7 +5,10 @@ import { useCallback, useEffect, useState } from "react";
 
 interface Dependency {
 	name: string;
+	extras: string;
 	currentVersion: string;
+	originalConstraint: string;
+	constraintOperator: string;
 	latestVersion?: string | null;
 	selected: boolean;
 	hasUpdate: boolean;
@@ -150,14 +153,26 @@ const App: React.FC = () => {
 					if (toml.default?.project?.dependencies) {
 						const deps: Dependency[] = toml.default.project.dependencies.map(
 							(dep: string) => {
-								// Parse package name, removing extras in square brackets
-								const match = dep.match(/^([^>=<~![]+)(\[.*?\])?([>=<~!].+)?$/);
+								// Parse package name, removing extras in square brackets and environment markers
+								const baseMatch = dep.split(";")[0] || dep; // Remove environment markers for now
+								const match = baseMatch.match(
+									/^([^>=<~![]+)(\[.*?\])?([>=<~!].+)?$/,
+								);
 								const name = match?.[1]?.trim() || dep;
-								const version = match?.[3]?.replace(/[>=<~!]/, "") || "latest";
+								const extras = match?.[2] || ""; // Preserve extras like [job-queue,rate-limiter]
+								const constraintPart = match?.[3] || "";
+
+								// Extract operator and version
+								const operatorMatch = constraintPart.match(/^([>=<~!]+)(.+)$/);
+								const operator = operatorMatch?.[1] || ">=";
+								const version = operatorMatch?.[2]?.trim() || "latest";
 
 								return {
 									name,
+									extras,
 									currentVersion: version,
+									originalConstraint: dep,
+									constraintOperator: operator,
 									latestVersion: undefined,
 									selected: false,
 									hasUpdate: false,
@@ -258,19 +273,37 @@ const App: React.FC = () => {
 		}
 
 		try {
-			// Read the current TOML file
+			// Read the current TOML file content
 			const content = await Bun.file(currentProject.filePath).text();
 			let updatedContent = content;
 
 			// Update each selected dependency to their latest version
 			for (const dep of selectedDeps) {
 				if (dep.latestVersion && dep.hasUpdate) {
-					// Find and replace the dependency line with the latest version
-					const depRegex = new RegExp(`"${dep.name}[^"]*"`, "g");
-					updatedContent = updatedContent.replace(
-						depRegex,
-						`"${dep.name}>=${dep.latestVersion}"`,
+					// Choose appropriate constraint operator based on original or use compatible release
+					let newOperator = "~="; // Default to compatible release
+
+					// Preserve strict equality or use compatible release for others
+					if (dep.constraintOperator === "==") {
+						newOperator = "==";
+					} else if (dep.constraintOperator === "~=") {
+						newOperator = "~=";
+					}
+					// For >=, >, <, <=, !=: default to ~= for better semantic versioning
+
+					// More precise replacement that preserves formatting
+					const escapedOriginal = dep.originalConstraint.replace(
+						/[.*+?^${}()|[\]\\]/g,
+						"\\$&",
 					);
+					const originalRegex = new RegExp(`"${escapedOriginal}"`, "g");
+
+					// Build new constraint string, preserving extras and environment markers
+					const envMarkerMatch = dep.originalConstraint.match(/;(.+)$/);
+					const envMarker = envMarkerMatch ? `;${envMarkerMatch[1]}` : "";
+					const newConstraint = `"${dep.name}${dep.extras}${newOperator}${dep.latestVersion}${envMarker}"`;
+
+					updatedContent = updatedContent.replace(originalRegex, newConstraint);
 				}
 			}
 
