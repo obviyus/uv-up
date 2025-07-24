@@ -1,4 +1,3 @@
-import { readdir } from "node:fs/promises";
 import { Box, render, Text, useApp, useInput } from "ink";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -30,6 +29,13 @@ interface ProjectInfo {
 interface PyPIResponse {
 	info?: {
 		version?: string;
+	};
+}
+
+interface PyProjectToml {
+	project?: {
+		name?: string;
+		dependencies?: string[];
 	};
 }
 
@@ -261,20 +267,18 @@ const App: React.FC = () => {
 
 	const loadProjects = useCallback(async () => {
 		try {
-			const files = await readdir(".", { recursive: true });
-			const pyprojectFiles = files.filter(
-				(file: string) =>
-					typeof file === "string" && file.endsWith("pyproject.toml"),
+			const files = [...new Bun.Glob("**/*.toml").scanSync(".")];
+			const pyprojectFiles = files.filter((file: string) =>
+				file.endsWith("pyproject.toml"),
 			);
 
 			const projectsData: ProjectInfo[] = [];
 
 			for (const file of pyprojectFiles) {
-				if (typeof file !== "string") continue;
-
 				try {
-					const toml = await import(`./${file}`, { with: { type: "toml" } });
-					const dependencies = toml.default?.project?.dependencies;
+					const tomlContent = await Bun.file(file).text();
+					const toml = Bun.TOML.parse(tomlContent) as PyProjectToml;
+					const dependencies = toml?.project?.dependencies;
 
 					if (dependencies && Array.isArray(dependencies)) {
 						const deps = dependencies
@@ -282,7 +286,7 @@ const App: React.FC = () => {
 							.map(parseDependency);
 
 						projectsData.push({
-							name: toml.default.project?.name || file,
+							name: toml.project?.name || file,
 							dependencies: deps,
 							filePath: file,
 						});
