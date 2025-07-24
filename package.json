@@ -3,20 +3,23 @@
 	"module": "index.tsx",
 	"type": "module",
 	"private": true,
+	"scripts": {
+		"lint": "biome check --fix index.tsx --unsafe"
+	},
 	"bin": {
 		"uv-up": "./index.tsx"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.0.5",
+		"@biomejs/biome": "^2.1.2",
 		"@types/bun": "latest",
 		"@types/react": "^19.1.8",
-		"react-devtools-core": "^6.1.2"
+		"react-devtools-core": "^6.1.5"
 	},
 	"peerDependencies": {
 		"typescript": "^5.8.3"
 	},
 	"dependencies": {
-		"ink": "^6.0.0",
+		"ink": "^6.0.1",
 		"react": "^19.1.0"
 	}
 }
