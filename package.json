@@ -4,7 +4,8 @@
 	"type": "module",
 	"private": true,
 	"scripts": {
-		"lint": "biome check --fix index.tsx --unsafe"
+		"lint": "biome check --fix index.tsx --unsafe",
+		"compile": "bun build index.tsx --compile --minify --sourcemap --outfile uv-up"
 	},
 	"bin": {
 		"uv-up": "./index.tsx"
