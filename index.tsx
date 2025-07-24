@@ -43,23 +43,15 @@ const OPERATOR_REGEX = /^([>=<~!]+)(.+)$/;
 const fetchLatestVersion = async (
 	packageName: string,
 ): Promise<string | null> => {
-	if (!packageName || packageName.trim().length === 0) {
-		return null;
-	}
+	if (!packageName?.trim()) return null;
 
 	try {
 		const response = await fetch(`${PYPI_API_BASE_URL}/${packageName}/json`);
-		if (!response.ok) {
-			if (response.status === 404) {
-				console.warn(`Package not found: ${packageName}`);
-			}
-			return null;
-		}
+		if (!response.ok) return null;
 
 		const data = (await response.json()) as PyPIResponse;
 		return data.info?.version || null;
-	} catch (error) {
-		console.error(`Failed to fetch version for ${packageName}:`, error);
+	} catch {
 		return null;
 	}
 };
@@ -67,13 +59,10 @@ const fetchLatestVersion = async (
 const compareVersions = (current: string, latest: string): boolean => {
 	if (!current || !latest) return false;
 
-	// Clean current version by removing operators and whitespace
 	const cleanCurrent = current.replace(/[>=<~!]/g, "").trim();
 	try {
-		// Use Bun's built-in semver comparison
 		return Bun.semver.order(cleanCurrent, latest) === -1;
 	} catch {
-		// Fallback to string comparison if semver parsing fails
 		return cleanCurrent !== latest;
 	}
 };
@@ -84,42 +73,70 @@ const getVersionChangeType = (
 ): VersionChangeType => {
 	const cleanCurrent = current.replace(/[>=<~!]/g, "").trim();
 	try {
-		const currentParts = cleanCurrent.split(".").map((v) => parseInt(v) || 0);
-		const latestParts = latest.split(".").map((v) => parseInt(v) || 0);
-
-		const currentMajor = currentParts[0] || 0;
-		const currentMinor = currentParts[1] || 0;
-		const latestMajor = latestParts[0] || 0;
-		const latestMinor = latestParts[1] || 0;
+		const [currentMajor = 0, currentMinor = 0] = cleanCurrent
+			.split(".")
+			.map((v) => parseInt(v) || 0);
+		const [latestMajor = 0, latestMinor = 0] = latest
+			.split(".")
+			.map((v) => parseInt(v) || 0);
 
 		if (latestMajor > currentMajor) return "major";
 		if (latestMinor > currentMinor) return "minor";
 		if (Bun.semver.order(cleanCurrent, latest) === -1) return "patch";
 		return "none";
 	} catch {
-		return "minor"; // Default fallback
+		return "minor";
 	}
 };
 
-// Helper function to pad strings for table alignment
 const padString = (
 	str: string,
 	length: number,
 	align: TextAlign = "left",
 ): string => {
-	if (align === "right") {
-		return str.padStart(length);
-	}
-	return str.padEnd(length);
+	return align === "right" ? str.padStart(length) : str.padEnd(length);
 };
 
-// Helper function to truncate long package names
 const truncatePackageName = (
 	name: string,
-	maxLength: number = MAX_PACKAGE_NAME_LENGTH,
+	maxLength = MAX_PACKAGE_NAME_LENGTH,
 ): string => {
 	if (!name || name.length <= maxLength) return name;
 	return `${name.substring(0, maxLength - 3)}...`;
+};
+
+const getStatusDisplay = (dep: Dependency) => {
+	if (dep.loading) return { text: "Checking...", color: "yellow" };
+	if (!dep.latestVersion) return { text: "Not found", color: "red" };
+	if (!dep.hasUpdate) return { text: "Up to date", color: "green" };
+
+	const changeType = getVersionChangeType(
+		dep.currentVersion,
+		dep.latestVersion,
+	);
+	const colorMap = {
+		major: "red",
+		minor: "yellow",
+		patch: "green",
+		none: "green",
+	};
+	return { text: changeType.toUpperCase(), color: colorMap[changeType] };
+};
+
+const calculateColumnWidths = (dependencies: Dependency[]) => {
+	const maxNameLength = Math.min(
+		Math.max(...dependencies.map((d) => d.name.length), 8),
+		MAX_PACKAGE_NAME_LENGTH,
+	);
+	const maxCurrentLength = Math.max(
+		...dependencies.map((d) => d.currentVersion.length),
+		7,
+	);
+	const maxLatestLength = Math.max(
+		...dependencies.map((d) => d.latestVersion?.length || 0),
+		6,
+	);
+	return { maxNameLength, maxCurrentLength, maxLatestLength };
 };
 
 // Component for displaying loading state
@@ -149,20 +166,16 @@ interface KeyboardShortcutsProps {
 }
 
 const KeyboardShortcuts: React.FC<KeyboardShortcutsProps> = ({ mode }) => {
-	const getShortcuts = () => {
-		switch (mode) {
-			case "project":
-				return "↑↓ navigate • Enter select • q quit";
-			case "dependencies":
-				return "↑↓ navigate • Space select • Enter continue • ← back • q quit";
-			default:
-				return "";
-		}
+	const shortcuts: Record<AppMode, string> = {
+		project: "↑↓ navigate • Enter select • q quit",
+		dependencies:
+			"↑↓ navigate • Space select • Enter continue • ← back • q quit",
+		confirm: "y confirm • n cancel • q quit",
 	};
 
 	return (
 		<Box marginTop={1} paddingTop={1} borderStyle="single" borderColor="gray">
-			<Text color="gray">{getShortcuts()}</Text>
+			<Text color="gray">{shortcuts[mode]}</Text>
 		</Box>
 	);
 };
@@ -174,7 +187,6 @@ const App: React.FC = () => {
 	const [mode, setMode] = useState<AppMode>("project");
 	const [loading, setLoading] = useState(true);
 
-	// Ensure selected indices are within bounds
 	const safeSelectedProjectIndex = Math.min(
 		selectedProjectIndex,
 		Math.max(0, projects.length - 1),
@@ -191,6 +203,9 @@ const App: React.FC = () => {
 	const fetchVersionsForProject = useCallback(async (project: ProjectInfo) => {
 		const promises = project.dependencies.map(async (dep, index) => {
 			const latestVersion = await fetchLatestVersion(dep.name);
+			const hasUpdate = latestVersion
+				? compareVersions(dep.currentVersion, latestVersion)
+				: false;
 
 			setProjects((prev) =>
 				prev.map((p) =>
@@ -199,14 +214,7 @@ const App: React.FC = () => {
 								...p,
 								dependencies: p.dependencies.map((d, i) =>
 									i === index
-										? {
-												...d,
-												latestVersion,
-												hasUpdate: latestVersion
-													? compareVersions(d.currentVersion, latestVersion)
-													: false,
-												loading: false,
-											}
+										? { ...d, latestVersion, hasUpdate, loading: false }
 										: d,
 								),
 							}
@@ -227,6 +235,30 @@ const App: React.FC = () => {
 		[fetchVersionsForProject],
 	);
 
+	const parseDependency = useCallback((dep: string): Dependency => {
+		const baseMatch = dep.split(";")[0] || dep;
+		const match = baseMatch.match(DEPENDENCY_REGEX);
+		const name = match?.[1]?.trim() || dep;
+		const extras = match?.[2] || "";
+		const constraintPart = match?.[3] || "";
+
+		const operatorMatch = constraintPart.match(OPERATOR_REGEX);
+		const operator = operatorMatch?.[1] || ">=";
+		const version = operatorMatch?.[2]?.trim() || "0.0.0";
+
+		return {
+			name,
+			extras,
+			currentVersion: version,
+			originalConstraint: dep,
+			constraintOperator: operator,
+			latestVersion: undefined,
+			selected: false,
+			hasUpdate: false,
+			loading: true,
+		};
+	}, []);
+
 	const loadProjects = useCallback(async () => {
 		try {
 			const files = await readdir(".", { recursive: true });
@@ -242,38 +274,12 @@ const App: React.FC = () => {
 
 				try {
 					const toml = await import(`./${file}`, { with: { type: "toml" } });
+					const dependencies = toml.default?.project?.dependencies;
 
-					if (
-						toml.default?.project?.dependencies &&
-						Array.isArray(toml.default.project.dependencies)
-					) {
-						const deps: Dependency[] = toml.default.project.dependencies
+					if (dependencies && Array.isArray(dependencies)) {
+						const deps = dependencies
 							.filter((dep: unknown): dep is string => typeof dep === "string")
-							.map((dep: string) => {
-								// Parse package name, removing extras in square brackets and environment markers
-								const baseMatch = dep.split(";")[0] || dep; // Remove environment markers for now
-								const match = baseMatch.match(DEPENDENCY_REGEX);
-								const name = match?.[1]?.trim() || dep;
-								const extras = match?.[2] || ""; // Preserve extras like [job-queue,rate-limiter]
-								const constraintPart = match?.[3] || "";
-
-								// Extract operator and version
-								const operatorMatch = constraintPart.match(OPERATOR_REGEX);
-								const operator = operatorMatch?.[1] || ">=";
-								const version = operatorMatch?.[2]?.trim() || "0.0.0";
-
-								return {
-									name,
-									extras,
-									currentVersion: version,
-									originalConstraint: dep,
-									constraintOperator: operator,
-									latestVersion: undefined,
-									selected: false,
-									hasUpdate: false,
-									loading: true,
-								};
-							});
+							.map(parseDependency);
 
 						projectsData.push({
 							name: toml.default.project?.name || file,
@@ -282,7 +288,6 @@ const App: React.FC = () => {
 						});
 					}
 				} catch (err) {
-					// Log error for debugging but continue processing other files
 					console.warn(
 						`Failed to parse ${file}:`,
 						err instanceof Error ? err.message : err,
@@ -292,19 +297,43 @@ const App: React.FC = () => {
 
 			setProjects(projectsData);
 			setLoading(false);
-
-			// Fetch version information for all dependencies
 			fetchVersionsForAllProjects(projectsData);
 		} catch (error) {
 			console.error("Failed to load projects:", error);
 			setLoading(false);
 		}
-	}, [fetchVersionsForAllProjects]);
+	}, [fetchVersionsForAllProjects, parseDependency]);
 
 	// Load projects on startup
 	useEffect(() => {
 		loadProjects();
 	}, [loadProjects]);
+
+	const handleNavigation = (direction: "up" | "down") => {
+		if (mode === "project") {
+			setSelectedProjectIndex((prev) =>
+				direction === "up"
+					? Math.max(0, prev - 1)
+					: Math.min(projects.length - 1, prev + 1),
+			);
+		} else if (mode === "dependencies" && currentProject) {
+			setSelectedDepIndex((prev) =>
+				direction === "up"
+					? Math.max(0, prev - 1)
+					: Math.min(currentProject.dependencies.length - 1, prev + 1),
+			);
+		}
+	};
+
+	const toggleDependencySelection = () => {
+		const newProjects = [...projects];
+		const targetProject = newProjects[safeSelectedProjectIndex];
+		const targetDep = targetProject?.dependencies[safeSelectedDepIndex];
+		if (targetProject && targetDep) {
+			targetDep.selected = !targetDep.selected;
+			setProjects(newProjects);
+		}
+	};
 
 	useInput((input, key) => {
 		if (key.escape || input === "q") {
@@ -312,48 +341,22 @@ const App: React.FC = () => {
 			return;
 		}
 
-		if (mode === "project") {
-			if (key.upArrow) {
-				setSelectedProjectIndex((prev) => Math.max(0, prev - 1));
-			} else if (key.downArrow) {
-				setSelectedProjectIndex((prev) =>
-					Math.min(projects.length - 1, prev + 1),
-				);
-			} else if (key.return) {
-				if (projects[safeSelectedProjectIndex]) {
-					setMode("dependencies");
-					setSelectedDepIndex(0);
-				}
-			}
-		} else if (mode === "dependencies") {
-			if (!currentProject) return;
-
-			if (key.upArrow) {
-				setSelectedDepIndex((prev) => Math.max(0, prev - 1));
-			} else if (key.downArrow) {
-				setSelectedDepIndex((prev) =>
-					Math.min(currentProject.dependencies.length - 1, prev + 1),
-				);
-			} else if (input === " ") {
-				// Toggle selection
-				const newProjects = [...projects];
-				const targetProject = newProjects[safeSelectedProjectIndex];
-				const targetDep = targetProject?.dependencies[safeSelectedDepIndex];
-				if (targetProject && targetDep) {
-					targetDep.selected = !targetDep.selected;
-					setProjects(newProjects);
-				}
-			} else if (key.return) {
-				setMode("confirm");
-			} else if (key.leftArrow) {
-				setMode("project");
-			}
-		} else if (mode === "confirm") {
-			if (input === "y") {
-				updateDependencies();
-			} else if (input === "n" || key.leftArrow) {
+		if (key.upArrow) handleNavigation("up");
+		else if (key.downArrow) handleNavigation("down");
+		else if (key.return) {
+			if (mode === "project" && projects[safeSelectedProjectIndex]) {
 				setMode("dependencies");
+				setSelectedDepIndex(0);
+			} else if (mode === "dependencies") {
+				setMode("confirm");
 			}
+		} else if (input === " " && mode === "dependencies") {
+			toggleDependencySelection();
+		} else if (key.leftArrow) {
+			setMode(mode === "dependencies" ? "project" : "dependencies");
+		} else if (mode === "confirm") {
+			if (input === "y") updateDependencies();
+			else if (input === "n") setMode("dependencies");
 		}
 	});
 
@@ -487,20 +490,8 @@ const App: React.FC = () => {
 	if (mode === "dependencies") {
 		if (!currentProject) return null;
 
-		// Calculate column widths based on content
-		const maxNameLength = Math.min(
-			Math.max(...currentProject.dependencies.map((d) => d.name.length), 8),
-			MAX_PACKAGE_NAME_LENGTH,
-		);
-		const maxCurrentLength = Math.max(
-			...currentProject.dependencies.map((d) => d.currentVersion.length),
-			7, // "Current" header length
-		);
-		const maxLatestLength = Math.max(
-			...currentProject.dependencies.map((d) => d.latestVersion?.length || 0),
-			6, // "Latest" header length
-		);
-
+		const { maxNameLength, maxCurrentLength, maxLatestLength } =
+			calculateColumnWidths(currentProject.dependencies);
 		const selectedCount = currentProject.dependencies.filter(
 			(d) => d.selected,
 		).length;
@@ -545,32 +536,7 @@ const App: React.FC = () => {
 				{currentProject.dependencies.map((dep, index) => {
 					const isSelected = index === selectedDepIndex;
 					const truncatedName = truncatePackageName(dep.name, maxNameLength);
-
-					let statusText = "";
-					let statusColor = "gray";
-
-					if (dep.loading) {
-						statusText = "Checking...";
-						statusColor = "yellow";
-					} else if (!dep.latestVersion) {
-						statusText = "Not found";
-						statusColor = "red";
-					} else if (dep.hasUpdate) {
-						const changeType = getVersionChangeType(
-							dep.currentVersion,
-							dep.latestVersion,
-						);
-						statusText = changeType.toUpperCase();
-						statusColor =
-							changeType === "major"
-								? "red"
-								: changeType === "minor"
-									? "yellow"
-									: "green";
-					} else {
-						statusText = "Up to date";
-						statusColor = "green";
-					}
+					const status = getStatusDisplay(dep);
 
 					return (
 						<Box key={`${dep.name}-${index}`} marginBottom={0}>
@@ -587,8 +553,8 @@ const App: React.FC = () => {
 								<Text color={dep.hasUpdate ? "green" : "gray"}>
 									{padString(dep.latestVersion || "─", maxLatestLength)}
 								</Text>{" "}
-								<Text color={statusColor} bold={dep.hasUpdate}>
-									{statusText}
+								<Text color={status.color} bold={dep.hasUpdate}>
+									{status.text}
 								</Text>
 							</Text>
 						</Box>
@@ -606,29 +572,10 @@ const App: React.FC = () => {
 		const selectedDeps = currentProject.dependencies.filter(
 			(dep) => dep.selected,
 		);
-
-		// Calculate column widths based on selected dependencies
-		const maxNameLength =
+		const { maxNameLength, maxCurrentLength, maxLatestLength } =
 			selectedDeps.length === 0
-				? 8
-				: Math.min(
-						Math.max(...selectedDeps.map((d) => d.name.length), 8),
-						MAX_PACKAGE_NAME_LENGTH,
-					);
-		const maxCurrentLength =
-			selectedDeps.length === 0
-				? 7
-				: Math.max(
-						...selectedDeps.map((d) => d.currentVersion.length),
-						7, // "Current" header length
-					);
-		const maxLatestLength =
-			selectedDeps.length === 0
-				? 6
-				: Math.max(
-						...selectedDeps.map((d) => d.latestVersion?.length || 0),
-						6, // "Latest" header length
-					);
+				? { maxNameLength: 8, maxCurrentLength: 7, maxLatestLength: 6 }
+				: calculateColumnWidths(selectedDeps);
 
 		return (
 			<Box flexDirection="column" padding={1}>
@@ -667,12 +614,12 @@ const App: React.FC = () => {
 					const changeType = dep.latestVersion
 						? getVersionChangeType(dep.currentVersion, dep.latestVersion)
 						: "minor";
-					const badgeColor =
-						changeType === "major"
-							? "red"
-							: changeType === "minor"
-								? "yellow"
-								: "green";
+					const colorMap = {
+						major: "red",
+						minor: "yellow",
+						patch: "green",
+						none: "green",
+					};
 					const truncatedName = truncatePackageName(dep.name, maxNameLength);
 
 					return (
@@ -683,7 +630,7 @@ const App: React.FC = () => {
 								<Text color="green" bold>
 									{padString(dep.latestVersion || "unknown", maxLatestLength)}
 								</Text>{" "}
-								<Text color={badgeColor} bold>
+								<Text color={colorMap[changeType]} bold>
 									{changeType.toUpperCase()}
 								</Text>
 							</Text>
