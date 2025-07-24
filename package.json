@@ -22,5 +22,6 @@
 	"dependencies": {
 		"ink": "^6.0.1",
 		"react": "^19.1.0"
-	}
+	},
+	"version": "1.0.0"
 }
