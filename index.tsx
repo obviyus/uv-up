@@ -3,6 +3,12 @@ import { Box, render, Text, useApp, useInput } from "ink";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 
+// Types
+type VersionChangeType = "major" | "minor" | "patch" | "none";
+type AppMode = "project" | "dependencies" | "confirm";
+type TextAlign = "left" | "right";
+
+// Interfaces
 interface Dependency {
 	name: string;
 	extras: string;
@@ -21,21 +27,46 @@ interface ProjectInfo {
 	filePath: string;
 }
 
+interface PyPIResponse {
+	info?: {
+		version?: string;
+	};
+}
+
+// Constants
+const MAX_PACKAGE_NAME_LENGTH = 25;
+const PYPI_API_BASE_URL = "https://pypi.org/pypi";
+const DEFAULT_CONSTRAINT_OPERATOR = "~=";
+const DEPENDENCY_REGEX = /^([^>=<~![]+)(\[.*?\])?([>=<~!].+)?$/;
+const OPERATOR_REGEX = /^([>=<~!]+)(.+)$/;
+
 const fetchLatestVersion = async (
 	packageName: string,
 ): Promise<string | null> => {
-	try {
-		const response = await fetch(`https://pypi.org/pypi/${packageName}/json`);
-		if (!response.ok) return null;
+	if (!packageName || packageName.trim().length === 0) {
+		return null;
+	}
 
-		const data: any = await response.json();
+	try {
+		const response = await fetch(`${PYPI_API_BASE_URL}/${packageName}/json`);
+		if (!response.ok) {
+			if (response.status === 404) {
+				console.warn(`Package not found: ${packageName}`);
+			}
+			return null;
+		}
+
+		const data = (await response.json()) as PyPIResponse;
 		return data.info?.version || null;
-	} catch (_error) {
+	} catch (error) {
+		console.error(`Failed to fetch version for ${packageName}:`, error);
 		return null;
 	}
 };
 
 const compareVersions = (current: string, latest: string): boolean => {
+	if (!current || !latest) return false;
+
 	// Clean current version by removing operators and whitespace
 	const cleanCurrent = current.replace(/[>=<~!]/g, "").trim();
 	try {
@@ -50,7 +81,7 @@ const compareVersions = (current: string, latest: string): boolean => {
 const getVersionChangeType = (
 	current: string,
 	latest: string,
-): "major" | "minor" | "patch" | "none" => {
+): VersionChangeType => {
 	const cleanCurrent = current.replace(/[>=<~!]/g, "").trim();
 	try {
 		const currentParts = cleanCurrent.split(".").map((v) => parseInt(v) || 0);
@@ -74,7 +105,7 @@ const getVersionChangeType = (
 const padString = (
 	str: string,
 	length: number,
-	align: "left" | "right" = "left",
+	align: TextAlign = "left",
 ): string => {
 	if (align === "right") {
 		return str.padStart(length);
@@ -83,19 +114,78 @@ const padString = (
 };
 
 // Helper function to truncate long package names
-const truncatePackageName = (name: string, maxLength: number): string => {
-	if (name.length <= maxLength) return name;
+const truncatePackageName = (
+	name: string,
+	maxLength: number = MAX_PACKAGE_NAME_LENGTH,
+): string => {
+	if (!name || name.length <= maxLength) return name;
 	return `${name.substring(0, maxLength - 3)}...`;
+};
+
+// Component for displaying loading state
+const LoadingScreen: React.FC = () => (
+	<Box flexDirection="column" padding={1}>
+		<Text color="cyan" bold>
+			🔍 Scanning for Python projects...
+		</Text>
+	</Box>
+);
+
+// Component for displaying no projects found
+const NoProjectsScreen: React.FC = () => (
+	<Box flexDirection="column" padding={1}>
+		<Text color="red" bold>
+			❌ No pyproject.toml files found
+		</Text>
+		<Text color="gray">
+			Make sure you're in a directory containing Python projects
+		</Text>
+	</Box>
+);
+
+// Component for displaying keyboard shortcuts
+interface KeyboardShortcutsProps {
+	mode: AppMode;
+}
+
+const KeyboardShortcuts: React.FC<KeyboardShortcutsProps> = ({ mode }) => {
+	const getShortcuts = () => {
+		switch (mode) {
+			case "project":
+				return "↑↓ navigate • Enter select • q quit";
+			case "dependencies":
+				return "↑↓ navigate • Space select • Enter continue • ← back • q quit";
+			default:
+				return "";
+		}
+	};
+
+	return (
+		<Box marginTop={1} paddingTop={1} borderStyle="single" borderColor="gray">
+			<Text color="gray">{getShortcuts()}</Text>
+		</Box>
+	);
 };
 
 const App: React.FC = () => {
 	const [projects, setProjects] = useState<ProjectInfo[]>([]);
 	const [selectedProjectIndex, setSelectedProjectIndex] = useState(0);
 	const [selectedDepIndex, setSelectedDepIndex] = useState(0);
-	const [mode, setMode] = useState<"project" | "dependencies" | "confirm">(
-		"project",
-	);
+	const [mode, setMode] = useState<AppMode>("project");
 	const [loading, setLoading] = useState(true);
+
+	// Ensure selected indices are within bounds
+	const safeSelectedProjectIndex = Math.min(
+		selectedProjectIndex,
+		Math.max(0, projects.length - 1),
+	);
+	const currentProject = projects[safeSelectedProjectIndex];
+	const safeSelectedDepIndex = currentProject
+		? Math.min(
+				selectedDepIndex,
+				Math.max(0, currentProject.dependencies.length - 1),
+			)
+		: 0;
 	const { exit } = useApp();
 
 	const fetchVersionsForProject = useCallback(async (project: ProjectInfo) => {
@@ -140,32 +230,37 @@ const App: React.FC = () => {
 	const loadProjects = useCallback(async () => {
 		try {
 			const files = await readdir(".", { recursive: true });
-			const pyprojectFiles = files.filter((file: string) =>
-				file.endsWith("pyproject.toml"),
+			const pyprojectFiles = files.filter(
+				(file: string) =>
+					typeof file === "string" && file.endsWith("pyproject.toml"),
 			);
 
 			const projectsData: ProjectInfo[] = [];
 
 			for (const file of pyprojectFiles) {
+				if (typeof file !== "string") continue;
+
 				try {
 					const toml = await import(`./${file}`, { with: { type: "toml" } });
 
-					if (toml.default?.project?.dependencies) {
-						const deps: Dependency[] = toml.default.project.dependencies.map(
-							(dep: string) => {
+					if (
+						toml.default?.project?.dependencies &&
+						Array.isArray(toml.default.project.dependencies)
+					) {
+						const deps: Dependency[] = toml.default.project.dependencies
+							.filter((dep: unknown): dep is string => typeof dep === "string")
+							.map((dep: string) => {
 								// Parse package name, removing extras in square brackets and environment markers
 								const baseMatch = dep.split(";")[0] || dep; // Remove environment markers for now
-								const match = baseMatch.match(
-									/^([^>=<~![]+)(\[.*?\])?([>=<~!].+)?$/,
-								);
+								const match = baseMatch.match(DEPENDENCY_REGEX);
 								const name = match?.[1]?.trim() || dep;
 								const extras = match?.[2] || ""; // Preserve extras like [job-queue,rate-limiter]
 								const constraintPart = match?.[3] || "";
 
 								// Extract operator and version
-								const operatorMatch = constraintPart.match(/^([>=<~!]+)(.+)$/);
+								const operatorMatch = constraintPart.match(OPERATOR_REGEX);
 								const operator = operatorMatch?.[1] || ">=";
-								const version = operatorMatch?.[2]?.trim() || "latest";
+								const version = operatorMatch?.[2]?.trim() || "0.0.0";
 
 								return {
 									name,
@@ -178,8 +273,7 @@ const App: React.FC = () => {
 									hasUpdate: false,
 									loading: true,
 								};
-							},
-						);
+							});
 
 						projectsData.push({
 							name: toml.default.project?.name || file,
@@ -187,8 +281,12 @@ const App: React.FC = () => {
 							filePath: file,
 						});
 					}
-				} catch (_err) {
-					// Skip files that can't be parsed
+				} catch (err) {
+					// Log error for debugging but continue processing other files
+					console.warn(
+						`Failed to parse ${file}:`,
+						err instanceof Error ? err.message : err,
+					);
 				}
 			}
 
@@ -197,7 +295,8 @@ const App: React.FC = () => {
 
 			// Fetch version information for all dependencies
 			fetchVersionsForAllProjects(projectsData);
-		} catch (_error) {
+		} catch (error) {
+			console.error("Failed to load projects:", error);
 			setLoading(false);
 		}
 	}, [fetchVersionsForAllProjects]);
@@ -221,13 +320,12 @@ const App: React.FC = () => {
 					Math.min(projects.length - 1, prev + 1),
 				);
 			} else if (key.return) {
-				if (projects[selectedProjectIndex]) {
+				if (projects[safeSelectedProjectIndex]) {
 					setMode("dependencies");
 					setSelectedDepIndex(0);
 				}
 			}
 		} else if (mode === "dependencies") {
-			const currentProject = projects[selectedProjectIndex];
 			if (!currentProject) return;
 
 			if (key.upArrow) {
@@ -239,8 +337,8 @@ const App: React.FC = () => {
 			} else if (input === " ") {
 				// Toggle selection
 				const newProjects = [...projects];
-				const targetProject = newProjects[selectedProjectIndex];
-				const targetDep = targetProject?.dependencies[selectedDepIndex];
+				const targetProject = newProjects[safeSelectedProjectIndex];
+				const targetDep = targetProject?.dependencies[safeSelectedDepIndex];
 				if (targetProject && targetDep) {
 					targetDep.selected = !targetDep.selected;
 					setProjects(newProjects);
@@ -259,11 +357,11 @@ const App: React.FC = () => {
 		}
 	});
 
-	const updateDependencies = async () => {
-		const currentProject = projects[selectedProjectIndex];
-		if (!currentProject) return;
+	const updateDependencies = useCallback(async () => {
+		const selectedProject = projects[safeSelectedProjectIndex];
+		if (!selectedProject) return;
 
-		const selectedDeps = currentProject.dependencies.filter(
+		const selectedDeps = selectedProject.dependencies.filter(
 			(dep) => dep.selected,
 		);
 
@@ -274,14 +372,14 @@ const App: React.FC = () => {
 
 		try {
 			// Read the current TOML file content
-			const content = await Bun.file(currentProject.filePath).text();
+			const content = await Bun.file(selectedProject.filePath).text();
 			let updatedContent = content;
 
 			// Update each selected dependency to their latest version
 			for (const dep of selectedDeps) {
 				if (dep.latestVersion && dep.hasUpdate) {
 					// Choose appropriate constraint operator based on original or use compatible release
-					let newOperator = "~="; // Default to compatible release
+					let newOperator = DEFAULT_CONSTRAINT_OPERATOR;
 
 					// Preserve strict equality or use compatible release for others
 					if (dep.constraintOperator === "==") {
@@ -308,11 +406,11 @@ const App: React.FC = () => {
 			}
 
 			// Write the updated content back
-			await Bun.write(currentProject.filePath, updatedContent);
+			await Bun.write(selectedProject.filePath, updatedContent);
 
 			// Show success and exit
 			console.log(
-				`✅ Updated ${selectedDeps.length} dependencies in ${currentProject.name}`,
+				`✅ Updated ${selectedDeps.length} dependencies in ${selectedProject.name}`,
 			);
 			selectedDeps.forEach((dep) => {
 				if (dep.latestVersion) {
@@ -326,29 +424,14 @@ const App: React.FC = () => {
 			console.error("❌ Failed to update dependencies:", error);
 			exit();
 		}
-	};
+	}, [projects, safeSelectedProjectIndex, exit]);
 
 	if (loading) {
-		return (
-			<Box flexDirection="column" padding={1}>
-				<Text color="cyan" bold>
-					🔍 Scanning for Python projects...
-				</Text>
-			</Box>
-		);
+		return <LoadingScreen />;
 	}
 
 	if (projects.length === 0) {
-		return (
-			<Box flexDirection="column" padding={1}>
-				<Text color="red" bold>
-					❌ No pyproject.toml files found
-				</Text>
-				<Text color="gray">
-					Make sure you're in a directory containing Python projects
-				</Text>
-			</Box>
-		);
+		return <NoProjectsScreen />;
 	}
 
 	if (mode === "project") {
@@ -396,26 +479,18 @@ const App: React.FC = () => {
 					);
 				})}
 
-				<Box
-					marginTop={1}
-					paddingTop={1}
-					borderStyle="single"
-					borderColor="gray"
-				>
-					<Text color="gray">↑↓ navigate • Enter select • q quit</Text>
-				</Box>
+				<KeyboardShortcuts mode={mode} />
 			</Box>
 		);
 	}
 
 	if (mode === "dependencies") {
-		const currentProject = projects[selectedProjectIndex];
 		if (!currentProject) return null;
 
 		// Calculate column widths based on content
 		const maxNameLength = Math.min(
 			Math.max(...currentProject.dependencies.map((d) => d.name.length), 8),
-			25, // Cap at 25 chars
+			MAX_PACKAGE_NAME_LENGTH,
 		);
 		const maxCurrentLength = Math.max(
 			...currentProject.dependencies.map((d) => d.currentVersion.length),
@@ -520,22 +595,12 @@ const App: React.FC = () => {
 					);
 				})}
 
-				<Box
-					marginTop={1}
-					paddingTop={1}
-					borderStyle="single"
-					borderColor="gray"
-				>
-					<Text color="gray">
-						↑↓ navigate • Space select • Enter continue • ← back • q quit
-					</Text>
-				</Box>
+				<KeyboardShortcuts mode={mode} />
 			</Box>
 		);
 	}
 
 	if (mode === "confirm") {
-		const currentProject = projects[selectedProjectIndex];
 		if (!currentProject) return null;
 
 		const selectedDeps = currentProject.dependencies.filter(
@@ -543,18 +608,27 @@ const App: React.FC = () => {
 		);
 
 		// Calculate column widths based on selected dependencies
-		const maxNameLength = Math.min(
-			Math.max(...selectedDeps.map((d) => d.name.length), 8),
-			25, // Cap at 25 chars
-		);
-		const maxCurrentLength = Math.max(
-			...selectedDeps.map((d) => d.currentVersion.length),
-			7, // "Current" header length
-		);
-		const maxLatestLength = Math.max(
-			...selectedDeps.map((d) => d.latestVersion?.length || 0),
-			6, // "Latest" header length
-		);
+		const maxNameLength =
+			selectedDeps.length === 0
+				? 8
+				: Math.min(
+						Math.max(...selectedDeps.map((d) => d.name.length), 8),
+						MAX_PACKAGE_NAME_LENGTH,
+					);
+		const maxCurrentLength =
+			selectedDeps.length === 0
+				? 7
+				: Math.max(
+						...selectedDeps.map((d) => d.currentVersion.length),
+						7, // "Current" header length
+					);
+		const maxLatestLength =
+			selectedDeps.length === 0
+				? 6
+				: Math.max(
+						...selectedDeps.map((d) => d.latestVersion?.length || 0),
+						6, // "Latest" header length
+					);
 
 		return (
 			<Box flexDirection="column" padding={1}>
