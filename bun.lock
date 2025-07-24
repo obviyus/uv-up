@@ -4,14 +4,14 @@
     "": {
       "name": "uv-up",
       "dependencies": {
-        "ink": "^6.0.0",
+        "ink": "^6.0.1",
         "react": "^19.1.0",
       },
       "devDependencies": {
-        "@biomejs/biome": "^2.0.5",
-        "@types/bun": "latest",
+        "@biomejs/biome": "^2.1.2",
+        "@types/bun": "^1.2.19",
         "@types/react": "^19.1.8",
-        "react-devtools-core": "^6.1.2",
+        "react-devtools-core": "^6.1.5",
       },
       "peerDependencies": {
         "typescript": "^5.8.3",
