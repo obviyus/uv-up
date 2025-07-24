@@ -16,23 +16,19 @@
 				"assets": [
 					{
 						"path": "dist/uv-up-darwin-arm64",
-						"name": "uv-up-darwin-arm64",
-						"label": "uv-up executable for macOS ARM64"
+						"name": "uv-up-darwin-arm64"
 					},
 					{
 						"path": "dist/uv-up-darwin-x64",
-						"name": "uv-up-darwin-x64",
-						"label": "uv-up executable for macOS x64"
+						"name": "uv-up-darwin-x64"
 					},
 					{
 						"path": "dist/uv-up-linux-arm64",
-						"name": "uv-up-linux-arm64",
-						"label": "uv-up executable for Linux ARM64"
+						"name": "uv-up-linux-arm64"
 					},
 					{
 						"path": "dist/uv-up-linux-x64",
-						"name": "uv-up-linux-x64",
-						"label": "uv-up executable for Linux x64"
+						"name": "uv-up-linux-x64"
 					}
 				]
 			}
