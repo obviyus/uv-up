@@ -10,6 +10,8 @@ bun build index.tsx --compile --minify --sourcemap --outfile uv-up
 cp uv-up ~/.local/bin/
 ```
 
+Or you can grab an executable for your platfrom from: https://github.com/obviyus/uv-up/releases
+
 ## Usage
 
 ```bash
