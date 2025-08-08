@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { Box, render, Text, useApp, useInput } from "ink";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -46,20 +47,93 @@ const DEFAULT_CONSTRAINT_OPERATOR = "~=";
 const DEPENDENCY_REGEX = /^([^>=<~![]+)(\[.*?\])?([>=<~!].+)?$/;
 const OPERATOR_REGEX = /^([>=<~!]+)(.+)$/;
 
+// Networking controls
+const MAX_CONCURRENT_REQUESTS = 8;
+const REQUEST_RETRY_ATTEMPTS = 3;
+const REQUEST_RETRY_BASE_MS = 300;
+
+// In-memory cache across a session
+const versionCache = new Map<string, string | null>();
+
+const createLimiter = (max: number) => {
+	let activeCount = 0;
+	const queue: Array<() => void> = [];
+
+	const next = () => {
+		activeCount = Math.max(0, activeCount - 1);
+		const resolve = queue.shift();
+		if (resolve) resolve();
+	};
+
+	async function runLimited<T>(fn: () => Promise<T>): Promise<T> {
+		if (activeCount >= max) {
+			await new Promise<void>((resolve) => queue.push(resolve));
+		}
+		activeCount++;
+		try {
+			return await fn();
+		} finally {
+			next();
+		}
+	}
+
+	return runLimited;
+};
+
+const limit = createLimiter(MAX_CONCURRENT_REQUESTS);
+
 const fetchLatestVersion = async (
 	packageName: string,
 ): Promise<string | null> => {
 	if (!packageName?.trim()) return null;
 
-	try {
-		const response = await fetch(`${PYPI_API_BASE_URL}/${packageName}/json`);
-		if (!response.ok) return null;
-
-		const data = (await response.json()) as PyPIResponse;
-		return data.info?.version || null;
-	} catch {
-		return null;
+	// Cache first
+	if (versionCache.has(packageName)) {
+		return versionCache.get(packageName) ?? null;
 	}
+
+	const exec = async (): Promise<string | null> => {
+		let attempt = 0;
+		const headers = {
+			"User-Agent": "uv-up/1.0 (+https://github.com/obviyus/uv-up)",
+			Accept: "application/json",
+		} as const;
+
+		while (attempt < REQUEST_RETRY_ATTEMPTS) {
+			try {
+				const response = await fetch(
+					`${PYPI_API_BASE_URL}/${packageName}/json`,
+					{ headers },
+				);
+				if (response.status === 404) {
+					versionCache.set(packageName, null);
+					return null;
+				}
+				if (response.ok) {
+					const data = (await response.json()) as PyPIResponse;
+					const version = data.info?.version || null;
+					versionCache.set(packageName, version);
+					return version;
+				}
+				if (response.status === 429 || response.status >= 500) {
+					const backoffMs = REQUEST_RETRY_BASE_MS * 2 ** attempt;
+					await Bun.sleep(backoffMs);
+					attempt++;
+					continue;
+				}
+				versionCache.set(packageName, null);
+				return null;
+			} catch {
+				const backoffMs = REQUEST_RETRY_BASE_MS * 2 ** attempt;
+				await Bun.sleep(backoffMs);
+				attempt++;
+			}
+		}
+		versionCache.set(packageName, null);
+		return null;
+	};
+
+	return limit(exec);
 };
 
 const compareVersions = (current: string, latest: string): boolean => {
@@ -173,9 +247,9 @@ interface KeyboardShortcutsProps {
 
 const KeyboardShortcuts: React.FC<KeyboardShortcutsProps> = ({ mode }) => {
 	const shortcuts: Record<AppMode, string> = {
-		project: "↑↓ navigate • Enter select • q quit",
+		project: "↑↓/j k navigate • Enter select • r refresh • q quit",
 		dependencies:
-			"↑↓ navigate • Space select • Enter continue • ← back • q quit",
+			"↑↓/j k navigate • Space toggle • a all • u outdated • Enter continue • ← back • r refresh • q quit",
 		confirm: "y confirm • n cancel • q quit",
 	};
 
@@ -207,36 +281,49 @@ const App: React.FC = () => {
 	const { exit } = useApp();
 
 	const fetchVersionsForProject = useCallback(async (project: ProjectInfo) => {
-		const promises = project.dependencies.map(async (dep, index) => {
-			const latestVersion = await fetchLatestVersion(dep.name);
-			const hasUpdate = latestVersion
-				? compareVersions(dep.currentVersion, latestVersion)
-				: false;
+		const results = await Promise.all(
+			project.dependencies.map(async (dep) => {
+				const isDirectUrl =
+					/\s@\s/.test(dep.originalConstraint) ||
+					/:\/\//.test(dep.originalConstraint) ||
+					dep.originalConstraint.startsWith("file:");
+				if (isDirectUrl) {
+					return { latestVersion: null as string | null, hasUpdate: false };
+				}
+				const latestVersion = await fetchLatestVersion(dep.name);
+				const hasUpdate = latestVersion
+					? compareVersions(dep.currentVersion, latestVersion)
+					: false;
+				return { latestVersion, hasUpdate };
+			}),
+		);
 
-			setProjects((prev) =>
-				prev.map((p) =>
-					p.filePath === project.filePath
-						? {
-								...p,
-								dependencies: p.dependencies.map((d, i) =>
-									i === index
-										? { ...d, latestVersion, hasUpdate, loading: false }
-										: d,
-								),
-							}
-						: p,
-				),
-			);
-		});
-
-		await Promise.all(promises);
+		setProjects((prev) =>
+			prev.map((p) =>
+				p.filePath === project.filePath
+					? {
+							...p,
+							dependencies: p.dependencies.map((d, i) => {
+								const r = results[i] ?? {
+									latestVersion: null as string | null,
+									hasUpdate: false,
+								};
+								return {
+									...d,
+									latestVersion: r.latestVersion,
+									hasUpdate: r.hasUpdate,
+									loading: false,
+								};
+							}),
+						}
+					: p,
+			),
+		);
 	}, []);
 
 	const fetchVersionsForAllProjects = useCallback(
 		async (projectsData: ProjectInfo[]) => {
-			for (const project of projectsData) {
-				await fetchVersionsForProject(project);
-			}
+			await Promise.all(projectsData.map((p) => fetchVersionsForProject(p)));
 		},
 		[fetchVersionsForProject],
 	);
@@ -275,6 +362,15 @@ const App: React.FC = () => {
 			const projectsData: ProjectInfo[] = [];
 
 			for (const file of pyprojectFiles) {
+				// Skip common virtual environment / vendor dirs
+				if (
+					/(^|\/)\.venv\//.test(file) ||
+					/(^|\/)venv\//.test(file) ||
+					/(^|\/)node_modules\//.test(file) ||
+					/(^|\/)\.tox\//.test(file)
+				) {
+					continue;
+				}
 				try {
 					const tomlContent = await Bun.file(file).text();
 					const toml = Bun.TOML.parse(tomlContent) as PyProjectToml;
@@ -339,14 +435,69 @@ const App: React.FC = () => {
 		}
 	};
 
+	const selectAllOutdated = useCallback(() => {
+		setProjects((prev) =>
+			prev.map((p, idx) =>
+				idx === safeSelectedProjectIndex
+					? {
+							...p,
+							dependencies: p.dependencies.map((d) =>
+								d.hasUpdate ? { ...d, selected: true } : d,
+							),
+						}
+					: p,
+			),
+		);
+	}, [safeSelectedProjectIndex]);
+
+	const selectOnlyOutdatedToggle = useCallback(() => {
+		setProjects((prev) =>
+			prev.map((p, idx) => {
+				if (idx !== safeSelectedProjectIndex) return p;
+				const allOutdatedSelected = p.dependencies
+					.filter((d) => d.hasUpdate)
+					.every((d) => d.selected);
+				return {
+					...p,
+					dependencies: p.dependencies.map((d) =>
+						d.hasUpdate
+							? { ...d, selected: !allOutdatedSelected }
+							: { ...d, selected: false },
+					),
+				};
+			}),
+		);
+	}, [safeSelectedProjectIndex]);
+
+	const refreshCurrentProject = useCallback(() => {
+		const project = projects[safeSelectedProjectIndex];
+		if (!project) return;
+		setProjects((prev) =>
+			prev.map((p, idx) =>
+				idx === safeSelectedProjectIndex
+					? {
+							...p,
+							dependencies: p.dependencies.map((d) => ({
+								...d,
+								loading: true,
+								latestVersion: undefined,
+								hasUpdate: false,
+							})),
+						}
+					: p,
+			),
+		);
+		void fetchVersionsForProject(project);
+	}, [projects, safeSelectedProjectIndex, fetchVersionsForProject]);
+
 	useInput((input, key) => {
 		if (key.escape || input === "q") {
 			exit();
 			return;
 		}
 
-		if (key.upArrow) handleNavigation("up");
-		else if (key.downArrow) handleNavigation("down");
+		if (key.upArrow || input === "k") handleNavigation("up");
+		else if (key.downArrow || input === "j") handleNavigation("down");
 		else if (key.return) {
 			if (mode === "project" && projects[safeSelectedProjectIndex]) {
 				setMode("dependencies");
@@ -356,8 +507,14 @@ const App: React.FC = () => {
 			}
 		} else if (input === " " && mode === "dependencies") {
 			toggleDependencySelection();
+		} else if (input === "a" && mode === "dependencies") {
+			selectAllOutdated();
+		} else if (input === "u" && mode === "dependencies") {
+			selectOnlyOutdatedToggle();
 		} else if (key.leftArrow) {
 			setMode(mode === "dependencies" ? "project" : "dependencies");
+		} else if (input === "r") {
+			refreshCurrentProject();
 		} else if (mode === "confirm") {
 			if (input === "y") updateDependencies();
 			else if (input === "n") setMode("dependencies");
@@ -396,19 +553,21 @@ const App: React.FC = () => {
 					}
 					// For >=, >, <, <=, !=: default to ~= for better semantic versioning
 
-					// More precise replacement that preserves formatting
+					// More precise replacement that preserves formatting and supports single/double quotes
 					const escapedOriginal = dep.originalConstraint.replace(
 						/[.*+?^${}()|[\]\\]/g,
 						"\\$&",
 					);
-					const originalRegex = new RegExp(`"${escapedOriginal}"`, "g");
+					const originalRegex = new RegExp(`(['"])${escapedOriginal}\\1`, "g");
 
 					// Build new constraint string, preserving extras and environment markers
 					const envMarkerMatch = dep.originalConstraint.match(/;(.+)$/);
 					const envMarker = envMarkerMatch ? `;${envMarkerMatch[1]}` : "";
-					const newConstraint = `"${dep.name}${dep.extras}${newOperator}${dep.latestVersion}${envMarker}"`;
-
-					updatedContent = updatedContent.replace(originalRegex, newConstraint);
+					const replacementInner = `${dep.name}${dep.extras}${newOperator}${dep.latestVersion}${envMarker}`;
+					updatedContent = updatedContent.replace(
+						originalRegex,
+						`$1${replacementInner}$1`,
+					);
 				}
 			}
 
