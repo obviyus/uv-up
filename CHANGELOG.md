@@ -1,3 +1,11 @@
+# [1.1.0](https://github.com/obviyus/uv-up/compare/v1.0.0...v1.1.0) (2025-08-08)
+
+
+### Features
+
+* enhance version fetching and project management ([3d41469](https://github.com/obviyus/uv-up/commit/3d414694504f5fcf66b52c1383924b8531671c3e))
+* update package.json for improved development workflow ([9e453f3](https://github.com/obviyus/uv-up/commit/9e453f34c939cc7c796f93b18409e7f2ea37c424))
+
 # 1.0.0 (2025-07-24)
 
 
