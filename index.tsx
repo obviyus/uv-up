@@ -16,7 +16,8 @@ interface Dependency {
 	originalConstraint: string;
 	constraintOperator: string;
 	latestVersion?: string | null;
-	selected: boolean;
+	// AIDEV-NOTE: `selected` removed - selection state now lives in a separate
+	// Map<filePath, Set<depIndex>> to avoid O(n²) object cloning on every toggle
 	hasUpdate: boolean;
 	loading: boolean;
 }
@@ -276,6 +277,25 @@ const App: React.FC = () => {
 	const [selectedDepIndex, setSelectedDepIndex] = useState(0);
 	const [mode, setMode] = useState<AppMode>("project");
 	const [loading, setLoading] = useState(true);
+	// Selection state: Map<filePath, Set<depIndex>> - O(1) toggle instead of O(n) clone
+	const [selectedDeps, setSelectedDeps] = useState<Map<string, Set<number>>>(
+		() => new Map(),
+	);
+
+	// O(1) lookup for whether a dependency is selected
+	const isDepSelected = useCallback(
+		(filePath: string, depIndex: number): boolean => {
+			return selectedDeps.get(filePath)?.has(depIndex) ?? false;
+		},
+		[selectedDeps],
+	);
+
+	const getSelectedCount = useCallback(
+		(filePath: string): number => {
+			return selectedDeps.get(filePath)?.size ?? 0;
+		},
+		[selectedDeps],
+	);
 
 	const safeSelectedProjectIndex = Math.min(
 		selectedProjectIndex,
@@ -356,7 +376,6 @@ const App: React.FC = () => {
 			originalConstraint: dep,
 			constraintOperator: operator,
 			latestVersion: undefined,
-			selected: false,
 			hasUpdate: false,
 			loading: true,
 		};
@@ -436,55 +455,60 @@ const App: React.FC = () => {
 	};
 
 	const toggleDependencySelection = () => {
-		setProjects((prev) =>
-			prev.map((p, pIdx) =>
-				pIdx === safeSelectedProjectIndex
-					? {
-							...p,
-							dependencies: p.dependencies.map((d, dIdx) =>
-								dIdx === safeSelectedDepIndex
-									? { ...d, selected: !d.selected }
-									: d,
-							),
-						}
-					: p,
-			),
-		);
+		if (!currentProject) return;
+		const filePath = currentProject.filePath;
+		setSelectedDeps((prev) => {
+			const next = new Map(prev);
+			const current = new Set(prev.get(filePath) ?? []);
+			if (current.has(safeSelectedDepIndex)) {
+				current.delete(safeSelectedDepIndex);
+			} else {
+				current.add(safeSelectedDepIndex);
+			}
+			next.set(filePath, current);
+			return next;
+		});
 	};
 
 	const selectAllOutdated = useCallback(() => {
-		setProjects((prev) =>
-			prev.map((p, idx) =>
-				idx === safeSelectedProjectIndex
-					? {
-							...p,
-							dependencies: p.dependencies.map((d) =>
-								d.hasUpdate ? { ...d, selected: true } : d,
-							),
-						}
-					: p,
-			),
-		);
-	}, [safeSelectedProjectIndex]);
+		if (!currentProject) return;
+		const filePath = currentProject.filePath;
+		const outdatedIndices = currentProject.dependencies
+			.map((d, i) => (d.hasUpdate ? i : -1))
+			.filter((i) => i !== -1);
+		setSelectedDeps((prev) => {
+			const next = new Map(prev);
+			const current = new Set(prev.get(filePath) ?? []);
+			for (const idx of outdatedIndices) {
+				current.add(idx);
+			}
+			next.set(filePath, current);
+			return next;
+		});
+	}, [currentProject]);
 
 	const selectOnlyOutdatedToggle = useCallback(() => {
-		setProjects((prev) =>
-			prev.map((p, idx) => {
-				if (idx !== safeSelectedProjectIndex) return p;
-				const allOutdatedSelected = p.dependencies
-					.filter((d) => d.hasUpdate)
-					.every((d) => d.selected);
-				return {
-					...p,
-					dependencies: p.dependencies.map((d) =>
-						d.hasUpdate
-							? { ...d, selected: !allOutdatedSelected }
-							: { ...d, selected: false },
-					),
-				};
-			}),
+		if (!currentProject) return;
+		const filePath = currentProject.filePath;
+		const currentSelection = selectedDeps.get(filePath) ?? new Set<number>();
+		const outdatedIndices = currentProject.dependencies
+			.map((d, i) => (d.hasUpdate ? i : -1))
+			.filter((i) => i !== -1);
+		const allOutdatedSelected = outdatedIndices.every((i) =>
+			currentSelection.has(i),
 		);
-	}, [safeSelectedProjectIndex]);
+		setSelectedDeps((prev) => {
+			const next = new Map(prev);
+			if (allOutdatedSelected) {
+				// Deselect all
+				next.set(filePath, new Set());
+			} else {
+				// Select only outdated
+				next.set(filePath, new Set(outdatedIndices));
+			}
+			return next;
+		});
+	}, [currentProject, selectedDeps]);
 
 	const refreshCurrentProject = useCallback(() => {
 		const project = projects[safeSelectedProjectIndex];
@@ -542,76 +566,83 @@ const App: React.FC = () => {
 		}
 	});
 
+	// AIDEV-NOTE: Optimized from O(n × file_size) to O(file_size) via single-pass regex
 	const updateDependencies = useCallback(async () => {
 		const selectedProject = projects[safeSelectedProjectIndex];
 		if (!selectedProject) return;
 
-		const selectedDeps = selectedProject.dependencies.filter(
-			(dep) => dep.selected,
-		);
+		const selectionSet = selectedDeps.get(selectedProject.filePath);
+		if (!selectionSet || selectionSet.size === 0) {
+			setMode("dependencies");
+			return;
+		}
 
-		if (selectedDeps.length === 0) {
+		// Build list of deps to update (only selected ones with updates)
+		const depsToUpdate: Dependency[] = [];
+		for (const idx of selectionSet) {
+			const dep = selectedProject.dependencies[idx];
+			if (dep?.latestVersion && dep.hasUpdate) {
+				depsToUpdate.push(dep);
+			}
+		}
+
+		if (depsToUpdate.length === 0) {
 			setMode("dependencies");
 			return;
 		}
 
 		try {
-			// Read the current TOML file content
 			const content = await Bun.file(selectedProject.filePath).text();
-			let updatedContent = content;
 
-			// Update each selected dependency to their latest version
-			for (const dep of selectedDeps) {
-				if (dep.latestVersion && dep.hasUpdate) {
-					// Choose appropriate constraint operator based on original or use compatible release
-					let newOperator = DEFAULT_CONSTRAINT_OPERATOR;
-
-					// Preserve strict equality or use compatible release for others
-					if (dep.constraintOperator === "==") {
-						newOperator = "==";
-					} else if (dep.constraintOperator === "~=") {
-						newOperator = "~=";
-					}
-					// For >=, >, <, <=, !=: default to ~= for better semantic versioning
-
-					// More precise replacement that preserves formatting and supports single/double quotes
-					const escapedOriginal = dep.originalConstraint.replace(
-						/[.*+?^${}()|[\]\\]/g,
-						"\\$&",
-					);
-					const originalRegex = new RegExp(`(['"])${escapedOriginal}\\1`, "g");
-
-					// Build new constraint string, preserving extras and environment markers
-					const envMarkerMatch = dep.originalConstraint.match(/;(.+)$/);
-					const envMarker = envMarkerMatch ? `;${envMarkerMatch[1]}` : "";
-					const replacementInner = `${dep.name}${dep.extras}${newOperator}${dep.latestVersion}${envMarker}`;
-					updatedContent = updatedContent.replace(
-						originalRegex,
-						`$1${replacementInner}$1`,
-					);
+			// Build replacement map: originalConstraint -> replacement string
+			const replacements = new Map<string, string>();
+			for (const dep of depsToUpdate) {
+				let newOperator = DEFAULT_CONSTRAINT_OPERATOR;
+				if (dep.constraintOperator === "==") {
+					newOperator = "==";
+				} else if (dep.constraintOperator === "~=") {
+					newOperator = "~=";
 				}
+				const envMarkerMatch = dep.originalConstraint.match(/;(.+)$/);
+				const envMarker = envMarkerMatch ? `;${envMarkerMatch[1]}` : "";
+				const replacement = `${dep.name}${dep.extras}${newOperator}${dep.latestVersion}${envMarker}`;
+				replacements.set(dep.originalConstraint, replacement);
 			}
 
-			// Write the updated content back
+			// Build single combined regex matching all patterns
+			const escapedPatterns = [...replacements.keys()].map((constraint) =>
+				constraint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+			);
+			const combinedRegex = new RegExp(
+				`(['"])(${escapedPatterns.join("|")})\\1`,
+				"g",
+			);
+
+			// Single-pass replacement
+			const updatedContent = content.replace(
+				combinedRegex,
+				(_, quote: string, constraint: string) => {
+					const replacement = replacements.get(constraint);
+					return replacement ? `${quote}${replacement}${quote}` : _;
+				},
+			);
+
 			await Bun.write(selectedProject.filePath, updatedContent);
 
-			// Show success and exit
 			console.log(
-				`✅ Updated ${selectedDeps.length} dependencies in ${selectedProject.name}`,
+				`✅ Updated ${depsToUpdate.length} dependencies in ${selectedProject.name}`,
 			);
-			selectedDeps.forEach((dep) => {
-				if (dep.latestVersion) {
-					console.log(
-						`  • ${dep.name}: ${dep.currentVersion} → ${dep.latestVersion}`,
-					);
-				}
-			});
+			for (const dep of depsToUpdate) {
+				console.log(
+					`  • ${dep.name}: ${dep.currentVersion} → ${dep.latestVersion}`,
+				);
+			}
 			exit();
 		} catch (error) {
 			console.error("❌ Failed to update dependencies:", error);
 			exit();
 		}
-	}, [projects, safeSelectedProjectIndex, exit]);
+	}, [projects, safeSelectedProjectIndex, selectedDeps, exit]);
 
 	if (loading) {
 		return <LoadingScreen />;
@@ -676,9 +707,7 @@ const App: React.FC = () => {
 
 		const { maxNameLength, maxCurrentLength, maxLatestLength } =
 			calculateColumnWidths(currentProject.dependencies);
-		const selectedCount = currentProject.dependencies.filter(
-			(d) => d.selected,
-		).length;
+		const selectedCount = getSelectedCount(currentProject.filePath);
 
 		return (
 			<Box flexDirection="column" padding={1}>
@@ -718,18 +747,19 @@ const App: React.FC = () => {
 
 				{/* Table Rows */}
 				{currentProject.dependencies.map((dep, index) => {
-					const isSelected = index === selectedDepIndex;
+					const isCursor = index === selectedDepIndex;
+					const isChecked = isDepSelected(currentProject.filePath, index);
 					const truncatedName = truncatePackageName(dep.name, maxNameLength);
 					const status = getStatusDisplay(dep);
 
 					return (
 						<Box key={`${dep.name}-${index}`} marginBottom={0}>
 							<Text
-								color={isSelected ? "cyan" : "white"}
-								backgroundColor={isSelected ? "blue" : undefined}
+								color={isCursor ? "cyan" : "white"}
+								backgroundColor={isCursor ? "blue" : undefined}
 							>
-								{isSelected ? "▶ " : "  "}
-								{dep.selected ? "✓ " : "☐ "}
+								{isCursor ? "▶ " : "  "}
+								{isChecked ? "✓ " : "☐ "}
 								{padString(truncatedName, maxNameLength)}{" "}
 								<Text color="gray">
 									{padString(dep.currentVersion, maxCurrentLength)}
@@ -753,13 +783,14 @@ const App: React.FC = () => {
 	if (mode === "confirm") {
 		if (!currentProject) return null;
 
-		const selectedDeps = currentProject.dependencies.filter(
-			(dep) => dep.selected,
-		);
+		const selectionSet = selectedDeps.get(currentProject.filePath);
+		const checkedDeps = selectionSet
+			? currentProject.dependencies.filter((_, i) => selectionSet.has(i))
+			: [];
 		const { maxNameLength, maxCurrentLength, maxLatestLength } =
-			selectedDeps.length === 0
+			checkedDeps.length === 0
 				? { maxNameLength: 8, maxCurrentLength: 7, maxLatestLength: 6 }
-				: calculateColumnWidths(selectedDeps);
+				: calculateColumnWidths(checkedDeps);
 
 		return (
 			<Box flexDirection="column" padding={1}>
@@ -771,7 +802,7 @@ const App: React.FC = () => {
 
 				<Box marginBottom={1}>
 					<Text>
-						About to update {selectedDeps.length} dependencies in{" "}
+						About to update {checkedDeps.length} dependencies in{" "}
 						{currentProject.name}:
 					</Text>
 				</Box>
@@ -794,7 +825,7 @@ const App: React.FC = () => {
 				</Box>
 
 				{/* Table Rows */}
-				{selectedDeps.map((dep, index) => {
+				{checkedDeps.map((dep, index) => {
 					const changeType = dep.latestVersion
 						? getVersionChangeType(dep.currentVersion, dep.latestVersion)
 						: "minor";
