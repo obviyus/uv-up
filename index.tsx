@@ -55,6 +55,16 @@ const REQUEST_RETRY_BASE_MS = 300;
 // In-memory cache across a session
 const versionCache = new Map<string, string | null>();
 
+const clearVersionCache = (packageNames?: string[]) => {
+	if (packageNames) {
+		for (const name of packageNames) {
+			versionCache.delete(name);
+		}
+	} else {
+		versionCache.clear();
+	}
+};
+
 const createLimiter = (max: number) => {
 	let activeCount = 0;
 	const queue: Array<() => void> = [];
@@ -426,13 +436,20 @@ const App: React.FC = () => {
 	};
 
 	const toggleDependencySelection = () => {
-		const newProjects = [...projects];
-		const targetProject = newProjects[safeSelectedProjectIndex];
-		const targetDep = targetProject?.dependencies[safeSelectedDepIndex];
-		if (targetProject && targetDep) {
-			targetDep.selected = !targetDep.selected;
-			setProjects(newProjects);
-		}
+		setProjects((prev) =>
+			prev.map((p, pIdx) =>
+				pIdx === safeSelectedProjectIndex
+					? {
+							...p,
+							dependencies: p.dependencies.map((d, dIdx) =>
+								dIdx === safeSelectedDepIndex
+									? { ...d, selected: !d.selected }
+									: d,
+							),
+						}
+					: p,
+			),
+		);
 	};
 
 	const selectAllOutdated = useCallback(() => {
@@ -472,6 +489,10 @@ const App: React.FC = () => {
 	const refreshCurrentProject = useCallback(() => {
 		const project = projects[safeSelectedProjectIndex];
 		if (!project) return;
+
+		// Clear cache for all packages in this project so we actually re-fetch
+		clearVersionCache(project.dependencies.map((d) => d.name));
+
 		setProjects((prev) =>
 			prev.map((p, idx) =>
 				idx === safeSelectedProjectIndex
