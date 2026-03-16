@@ -1,18 +1,17 @@
 # UV-UP
 
-Interactive Python dependency updater for `pyproject.toml` files.
+Interactive dependency updater for `uv` projects.
 
 ## Installation
 
 ```bash
-bun install
-bun run build
-cp uv-up ~/.local/bin/
+cargo build --release
+cp target/release/uv-up ~/.local/bin/
 ```
 
-Or you can grab an executable for your platfrom from: https://github.com/obviyus/uv-up/releases
-
 ## Usage
+
+Run inside a repo containing one or more `pyproject.toml` files:
 
 ```bash
 uv-up
@@ -30,30 +29,30 @@ Keys:
 - y/n: confirm/cancel
 - q or Esc: quit
 
-## Example
+On apply, `uv-up` updates the selected requirement strings in `pyproject.toml` and then runs `uv lock` in that project directory. If `uv lock` fails, the manifest is restored.
 
-```
-🐍 UV-UP - Python Dependency Updater
+## Scope
 
-Select a project:
-▶ my-api-project (15 deps • 3 updates available)
-  data-processor (8 deps • up to date)
+- Scans:
+  - `[project].dependencies`
+  - `[project.optional-dependencies]`
+  - `[dependency-groups]`
+- Skips dependencies managed by `[tool.uv.sources]`
+- Supports updating only single-clause version specs:
+  - `==`
+  - `~=`
+  - `>=`
+- Fails loud on unsupported dependency specs instead of rewriting them incorrectly
 
-📦 my-api-project (2 selected)
+Unsupported examples:
 
-    Package      Current    Latest     Status
-    ──────────────────────────────────────────
-▶ ✓ fastapi      0.104.1    0.109.2    MINOR
-  ✓ pydantic     2.5.0      2.6.1      MINOR
-  ☐ uvicorn      0.24.0     0.27.0     MINOR
-```
+- unpinned requirements like `"httpx"`
+- multi-clause ranges like `"httpx>=0.27,<1"`
+- direct URL requirements
+- source-managed requirements via `tool.uv.sources`
 
 ## Requirements
 
-- [Bun](https://bun.sh/) runtime
+- Rust toolchain
+- `uv`
 - Python projects with `pyproject.toml` files
-
-Notes:
-
-- `uv-up` preserves extras and environment markers (PEP 508) and respects the original quote style when updating.
-- Non-PyPI specs (URLs, file: paths, direct VCS) are detected and left untouched.
