@@ -1,8 +1,13 @@
 use std::collections::BTreeSet;
+use std::collections::HashSet;
+use std::io::{Write, stdout};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use crossterm::ExecutableCommand;
+use crossterm::cursor::MoveToColumn;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{Clear, ClearType};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -20,7 +25,9 @@ pub fn run(projects: Vec<Project>) -> Result<Option<UpdateSummary>> {
         return Ok(None);
     }
 
+    let loading_line = LoadingLine::show(loading_message(&projects)?)?;
     let mut app = App::new(projects)?;
+    drop(loading_line);
     let mut terminal = ratatui::try_init_with_options(TerminalOptions {
         viewport: Viewport::Inline(20),
     })
@@ -28,6 +35,52 @@ pub fn run(projects: Vec<Project>) -> Result<Option<UpdateSummary>> {
     let result = app.run(&mut terminal);
     ratatui::restore();
     result
+}
+
+struct LoadingLine;
+
+impl LoadingLine {
+    fn show(message: String) -> Result<Self> {
+        let mut stdout = stdout();
+        write!(stdout, "\r{message}")?;
+        stdout.flush()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for LoadingLine {
+    fn drop(&mut self) {
+        let mut stdout = stdout();
+        let _ = stdout.execute(MoveToColumn(0));
+        let _ = stdout.execute(Clear(ClearType::CurrentLine));
+        let _ = stdout.flush();
+    }
+}
+
+fn loading_message(projects: &[Project]) -> Result<String> {
+    let package_count = projects
+        .iter()
+        .flat_map(|project| project.dependencies.iter())
+        .filter_map(|dependency| match dependency.kind {
+            crate::model::DependencyKind::Supported { .. } => Some(dependency.name.as_str()),
+            crate::model::DependencyKind::Unsupported { .. } => None,
+        })
+        .collect::<HashSet<_>>()
+        .len();
+    let project_label = if projects.len() == 1 {
+        "project"
+    } else {
+        "projects"
+    };
+    let package_label = if package_count == 1 {
+        "package"
+    } else {
+        "packages"
+    };
+    Ok(format!(
+        "uv-up loading metadata for {package_count} {package_label} across {} {project_label}...",
+        projects.len()
+    ))
 }
 
 struct App {
@@ -44,9 +97,7 @@ impl App {
     fn new(mut projects: Vec<Project>) -> Result<Self> {
         let project_count = projects.len();
         let mut pypi = PypiClient::new()?;
-        for project in &mut projects {
-            pypi.hydrate_project(&mut project.dependencies);
-        }
+        pypi.hydrate_projects(&mut projects);
         let mode = if projects.len() == 1 {
             AppMode::Dependencies
         } else {
