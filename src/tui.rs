@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -35,13 +35,14 @@ struct App {
     projects: Vec<Project>,
     selected_project: usize,
     selected_dependency: usize,
-    selected: BTreeMap<String, BTreeSet<usize>>,
+    selected: Vec<BTreeSet<usize>>,
     status_line: Option<String>,
     pypi: PypiClient,
 }
 
 impl App {
     fn new(mut projects: Vec<Project>) -> Result<Self> {
+        let project_count = projects.len();
         let mut pypi = PypiClient::new()?;
         for project in &mut projects {
             pypi.hydrate_project(&mut project.dependencies);
@@ -57,7 +58,7 @@ impl App {
             projects,
             selected_project: 0,
             selected_dependency: 0,
-            selected: BTreeMap::new(),
+            selected: vec![BTreeSet::new(); project_count],
             status_line: None,
             pypi,
         })
@@ -236,7 +237,7 @@ impl App {
             return;
         };
 
-        let selected = self.selected_for(project);
+        let selected = self.selected_for_current();
         let name_width = project
             .dependencies
             .iter()
@@ -319,7 +320,7 @@ impl App {
         let Some(project) = self.current_project() else {
             return;
         };
-        let selected = self.selected_for(project);
+        let selected = self.selected_for_current();
         let chosen: Vec<&DependencyEntry> = selected
             .iter()
             .filter_map(|index| project.dependencies.get(*index))
@@ -394,7 +395,8 @@ impl App {
     }
 
     fn toggle_current(&mut self) {
-        let Some(project) = self.current_project() else {
+        let project_index = self.selected_project;
+        let Some(project) = self.projects.get(project_index) else {
             return;
         };
         let Some(dependency) = project.dependencies.get(self.selected_dependency) else {
@@ -411,15 +413,15 @@ impl App {
             return;
         }
 
-        let key = project.file_path.display().to_string();
-        let selected = self.selected.entry(key).or_default();
+        let selected = &mut self.selected[project_index];
         if !selected.insert(self.selected_dependency) {
             selected.remove(&self.selected_dependency);
         }
     }
 
     fn select_all_outdated(&mut self) {
-        let Some(project) = self.current_project() else {
+        let project_index = self.selected_project;
+        let Some(project) = self.projects.get(project_index) else {
             return;
         };
         let outdated: BTreeSet<usize> = project
@@ -428,26 +430,22 @@ impl App {
             .enumerate()
             .filter_map(|(index, dependency)| dependency.selectable().then_some(index))
             .collect();
-        let key = project.file_path.display().to_string();
-        let selected = self.selected.entry(key).or_default();
-        *selected = outdated;
+        self.selected[project_index] = outdated;
     }
 
     fn clear_selection(&mut self) {
-        let Some(project) = self.current_project() else {
+        let project_index = self.selected_project;
+        if project_index >= self.selected.len() {
             return;
-        };
-        self.selected
-            .entry(project.file_path.display().to_string())
-            .or_default()
-            .clear();
+        }
+        self.selected[project_index].clear();
     }
 
     fn toggle_only_outdated(&mut self) {
-        let Some(project) = self.current_project() else {
+        let project_index = self.selected_project;
+        let Some(project) = self.projects.get(project_index) else {
             return;
         };
-        let key = project.file_path.display().to_string();
         let all_outdated: BTreeSet<usize> = project
             .dependencies
             .iter()
@@ -455,7 +453,7 @@ impl App {
             .filter_map(|(index, dependency)| dependency.selectable().then_some(index))
             .collect();
 
-        let selected = self.selected.entry(key).or_default();
+        let selected = &mut self.selected[project_index];
         if *selected == all_outdated {
             selected.clear();
         } else {
@@ -493,7 +491,7 @@ impl App {
             .current_project()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no project selected"))?;
-        let selected = self.selected_for(&project).clone();
+        let selected = self.selected_for_current().clone();
         let summary = pyproject::update_project(&project, &selected)?;
         self.status_line = Some(format!(
             "Updated {} dependencies in {}",
@@ -506,11 +504,9 @@ impl App {
     fn current_project(&self) -> Option<&Project> {
         self.projects.get(self.selected_project)
     }
-    fn selected_for<'a>(&'a self, project: &Project) -> &'a BTreeSet<usize> {
-        static EMPTY: std::sync::OnceLock<BTreeSet<usize>> = std::sync::OnceLock::new();
-        self.selected
-            .get(&project.file_path.display().to_string())
-            .unwrap_or_else(|| EMPTY.get_or_init(BTreeSet::new))
+
+    fn selected_for_current(&self) -> &BTreeSet<usize> {
+        &self.selected[self.selected_project]
     }
 }
 

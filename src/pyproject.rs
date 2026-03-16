@@ -83,7 +83,7 @@ where
             ),
         };
 
-        let current = dependency.current_version_text();
+        let current = dependency.current_version_text().to_string();
         let new_requirement = build_requirement_string(dependency, &latest, &strategy);
         replace_requirement_value(&mut document, dependency, &new_requirement)?;
         updated.push((dependency.display_name.clone(), current, latest));
@@ -230,6 +230,7 @@ fn parse_dependency_entry(
             } else {
                 classify_requirement(requirement)
             };
+            let current_version_text = current_version_text_for_kind(&kind);
             let status = match &kind {
                 DependencyKind::Unsupported { reason, .. } => {
                     DependencyStatus::Unsupported(reason.clone())
@@ -240,6 +241,7 @@ fn parse_dependency_entry(
             DependencyEntry {
                 name,
                 display_name,
+                current_version_text,
                 section,
                 item_index,
                 kind,
@@ -251,6 +253,7 @@ fn parse_dependency_entry(
         Err(err) => DependencyEntry {
             name: raw.clone(),
             display_name: raw.clone(),
+            current_version_text: "n/a".to_string(),
             section,
             item_index,
             kind: DependencyKind::Unsupported {
@@ -439,6 +442,21 @@ pub fn normalize_package_name(name: &str) -> String {
             other => other.to_ascii_lowercase(),
         })
         .collect()
+}
+
+fn current_version_text_for_kind(kind: &DependencyKind) -> String {
+    match kind {
+        DependencyKind::Supported {
+            current_version, ..
+        } => current_version.to_string(),
+        DependencyKind::Unsupported { requirement, .. } => requirement
+            .as_ref()
+            .and_then(|req| match &req.version_or_url {
+                Some(pep508_rs::VersionOrUrl::VersionSpecifier(specs)) => Some(specs.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "n/a".to_string()),
+    }
 }
 
 #[cfg(test)]

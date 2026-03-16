@@ -109,6 +109,7 @@ impl DependencyStatus {
 pub struct DependencyEntry {
     pub name: String,
     pub display_name: String,
+    pub current_version_text: String,
     pub section: DependencySection,
     pub item_index: usize,
     pub kind: DependencyKind,
@@ -118,21 +119,8 @@ pub struct DependencyEntry {
 }
 
 impl DependencyEntry {
-    pub fn current_version_text(&self) -> String {
-        match &self.kind {
-            DependencyKind::Supported {
-                current_version, ..
-            } => current_version.to_string(),
-            DependencyKind::Unsupported { requirement, .. } => requirement
-                .as_ref()
-                .and_then(|req| match &req.version_or_url {
-                    Some(pep508_rs::VersionOrUrl::VersionSpecifier(specs)) => {
-                        Some(specs.to_string())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| "n/a".to_string()),
-        }
+    pub fn current_version_text(&self) -> &str {
+        &self.current_version_text
     }
 
     pub fn selectable(&self) -> bool {
