@@ -493,7 +493,7 @@ mod tests {
 
     fn make_temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "uv-up-tests-{label}-{}-{}",
+            "uvlift-tests-{label}-{}-{}",
             std::process::id(),
             TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));

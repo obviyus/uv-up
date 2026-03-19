@@ -35,7 +35,7 @@ impl PypiClient {
 
     fn with_base_url(base_url: impl Into<String>) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("uv-up/1.1.0 (+https://github.com/obviyus/uv-up)")
+            .user_agent("uvlift/1.1.0 (+https://github.com/obviyus/uvlift)")
             .timeout(Duration::from_secs(10))
             .build()
             .context("failed to build HTTP client")?;

@@ -78,7 +78,7 @@ fn loading_message(projects: &[Project]) -> Result<String> {
         "packages"
     };
     Ok(format!(
-        "uv-up loading metadata for {package_count} {package_label} across {} {project_label}...",
+        "uvlift loading metadata for {package_count} {package_label} across {} {project_label}...",
         projects.len()
     ))
 }
