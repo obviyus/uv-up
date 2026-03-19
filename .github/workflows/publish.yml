@@ -7,7 +7,34 @@ on:
   workflow_dispatch:
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches Cargo version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            exit 0
+          fi
+
+          tag_version="${GITHUB_REF_NAME#v}"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+
+          if [[ -z "$cargo_version" ]]; then
+            echo "Failed to read version from Cargo.toml"
+            exit 1
+          fi
+
+          if [[ "$tag_version" != "$cargo_version" ]]; then
+            echo "Tag version ($tag_version) does not match Cargo.toml version ($cargo_version)"
+            exit 1
+          fi
+
   wheels:
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -42,6 +69,7 @@ jobs:
           path: dist
 
   sdist:
+    needs: verify-version
     runs-on: ubuntu-latest
 
     steps:
