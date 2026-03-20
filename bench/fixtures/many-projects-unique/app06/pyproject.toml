@@ -1,0 +1,11 @@
+[project]
+name = "unique-bench-app06"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "h11>=0.14.0",
+    "h2>=4.1.0",
+    "hpack>=4.0.0",
+    "hyperframe>=6.0.1",
+    "trio>=0.25.1",
+]

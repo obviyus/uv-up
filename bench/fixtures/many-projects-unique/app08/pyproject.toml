@@ -1,0 +1,11 @@
+[project]
+name = "unique-bench-app08"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "requests-toolbelt>=1.0.0",
+    "python-slugify>=8.0.4",
+    "inflect>=7.3.1",
+    "faker>=26.0.0",
+    "pillow>=10.4.0",
+]
