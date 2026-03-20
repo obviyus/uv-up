@@ -241,8 +241,12 @@ impl App {
 
     fn render_projects(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         let mut lines = Vec::new();
+        let mut selected_line = 0;
 
         for (index, project) in self.projects.iter().enumerate() {
+            if index == self.selected_project {
+                selected_line = lines.len();
+            }
             let prefix = if index == self.selected_project {
                 "❯ "
             } else {
@@ -280,7 +284,8 @@ impl App {
             ]));
         }
 
-        frame.render_widget(Paragraph::new(Text::from(lines)), area);
+        let scroll = vertical_scroll_offset(selected_line, lines.len(), usize::from(area.height));
+        frame.render_widget(Paragraph::new(Text::from(lines)).scroll((scroll as u16, 0)), area);
     }
 
     fn render_dependencies(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
@@ -313,6 +318,7 @@ impl App {
         let target_width = latest_width.max(6);
 
         let mut lines = Vec::new();
+        let mut selected_line = 0;
         lines.push(Line::from(vec![
             Span::styled(project.name.clone(), Style::default().fg(Color::DarkGray)),
             Span::styled(
@@ -350,6 +356,9 @@ impl App {
             }
             let is_cursor = index == self.selected_dependency;
             let is_selected = selected.contains(&index);
+            if is_cursor {
+                selected_line = lines.len();
+            }
             lines.push(render_dependency_line(
                 dependency,
                 is_cursor,
@@ -361,8 +370,11 @@ impl App {
             ));
         }
 
+        let scroll = vertical_scroll_offset(selected_line, lines.len(), usize::from(area.height));
         frame.render_widget(
-            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            Paragraph::new(Text::from(lines))
+                .wrap(Wrap { trim: false })
+                .scroll((scroll as u16, 0)),
             area,
         );
     }
@@ -573,6 +585,15 @@ fn move_index(current: usize, len: usize, delta: isize) -> usize {
     }
 }
 
+fn vertical_scroll_offset(selected_line: usize, total_lines: usize, viewport_height: usize) -> usize {
+    if viewport_height == 0 || total_lines <= viewport_height {
+        return 0;
+    }
+
+    let max_scroll = total_lines - viewport_height;
+    selected_line.saturating_sub(viewport_height.saturating_sub(1)).min(max_scroll)
+}
+
 fn render_dependency_line(
     dependency: &DependencyEntry,
     is_cursor: bool,
@@ -640,5 +661,25 @@ fn section_title(section: &DependencySection) -> String {
         DependencySection::Project => "dependencies".to_string(),
         DependencySection::Optional(name) => format!("extra:{name}"),
         DependencySection::Group(name) => format!("group:{name}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vertical_scroll_offset;
+
+    #[test]
+    fn no_scroll_when_content_fits() {
+        assert_eq!(vertical_scroll_offset(4, 10, 10), 0);
+    }
+
+    #[test]
+    fn keeps_selected_line_visible_near_bottom() {
+        assert_eq!(vertical_scroll_offset(10, 20, 8), 3);
+    }
+
+    #[test]
+    fn clamps_to_last_page() {
+        assert_eq!(vertical_scroll_offset(19, 20, 8), 12);
     }
 }
