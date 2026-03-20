@@ -54,6 +54,19 @@ The repo uses [maturin](https://www.maturin.rs/) (`bindings = "bin"`) to package
 uvx --from . uvlift
 ```
 
+## Releasing
+
+1. Bump `version` in `Cargo.toml`.
+2. Commit the change.
+3. Create a tag like `v1.1.6` on that commit.
+4. Push `master` and the tag.
+
+```bash
+git push origin master v1.1.6
+```
+
+Pushing the tag triggers the publish workflow, which verifies the version, builds wheels and sdist, uploads to PyPI, and creates a GitHub Release with the artifacts.
+
 ## Requirements
 
 - `uv` on `PATH`
