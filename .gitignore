@@ -1,5 +1,7 @@
 # Rust
 target
+uv.lock
+.venv
 
 # IntelliJ based IDEs
 .idea

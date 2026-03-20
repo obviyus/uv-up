@@ -1,6 +1,6 @@
 [package]
 name = "uvlift"
-version = "1.1.4"
+version = "1.1.5"
 edition = "2024"
 description = "Interactive dependency updater for uv projects"
 license = "MIT"
