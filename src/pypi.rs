@@ -24,7 +24,7 @@ struct PypiInfo {
 
 pub struct PypiClient {
     base_url: String,
-    client: reqwest::blocking::Client,
+    agent: ureq::Agent,
     cache: HashMap<String, Option<String>>,
 }
 
@@ -33,15 +33,15 @@ impl PypiClient {
         Self::with_base_url(PYPI_API_BASE_URL)
     }
 
-    fn with_base_url(base_url: impl Into<String>) -> Result<Self> {
-        let client = reqwest::blocking::Client::builder()
+    pub fn with_base_url(base_url: impl Into<String>) -> Result<Self> {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(10)))
             .user_agent("uvlift/1.1.0 (+https://github.com/obviyus/uvlift)")
-            .timeout(Duration::from_secs(10))
-            .build()
-            .context("failed to build HTTP client")?;
+            .accept("application/json")
+            .build();
         Ok(Self {
             base_url: base_url.into(),
-            client,
+            agent: config.into(),
             cache: HashMap::new(),
         })
     }
@@ -164,22 +164,23 @@ impl PypiClient {
             return Vec::new();
         }
 
+        let worker_cap = if package_names.len() <= 5 { 3 } else { 2 };
         let worker_count = thread::available_parallelism()
             .map(|count| count.get())
             .unwrap_or(1)
             .min(package_names.len())
-            .min(8);
+            .min(worker_cap);
         let chunk_size = package_names.len().div_ceil(worker_count);
 
         thread::scope(|scope| {
             let mut workers = Vec::with_capacity(worker_count);
             for chunk in package_names.chunks(chunk_size) {
-                let client = self.client.clone();
+                let agent = self.agent.clone();
                 let base_url = self.base_url.clone();
                 workers.push(scope.spawn(move || {
                     let mut results = Vec::with_capacity(chunk.len());
                     for package_name in chunk {
-                        let result = fetch_latest_version(&client, &base_url, package_name)
+                        let result = fetch_latest_version(&agent, &base_url, package_name)
                             .map_err(|err| err.to_string());
                         results.push((package_name.clone(), result));
                     }
@@ -196,37 +197,27 @@ impl PypiClient {
 }
 
 fn fetch_latest_version(
-    client: &reqwest::blocking::Client,
+    agent: &ureq::Agent,
     base_url: &str,
     package_name: &str,
 ) -> Result<Option<String>> {
     for attempt in 0..REQUEST_RETRY_ATTEMPTS {
-        let response = client
-            .get(format!("{base_url}/{package_name}/json"))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send();
+        let response = agent.get(format!("{base_url}/{package_name}/json")).call();
 
         match response {
-            Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {
-                return Ok(None);
-            }
-            Ok(response) if response.status().is_success() => {
+            Ok(mut response) => {
                 let payload: PypiResponse = response
-                    .json()
+                    .body_mut()
+                    .read_json()
                     .with_context(|| format!("failed to parse PyPI payload for {package_name}"))?;
                 return Ok(payload.info.and_then(|info| info.version));
             }
-            Ok(response)
-                if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    || response.status().is_server_error() =>
-            {
+            Err(ureq::Error::StatusCode(404)) => return Ok(None),
+            Err(ureq::Error::StatusCode(code)) if code == 429 || code >= 500 => {
                 thread::sleep(Duration::from_millis(300 * (1_u64 << attempt)));
             }
-            Ok(response) => {
-                anyhow::bail!(
-                    "PyPI request failed for {package_name}: HTTP {}",
-                    response.status()
-                );
+            Err(ureq::Error::StatusCode(code)) => {
+                anyhow::bail!("PyPI request failed for {package_name}: HTTP {code}");
             }
             Err(err) if attempt + 1 < REQUEST_RETRY_ATTEMPTS => {
                 thread::sleep(Duration::from_millis(300 * (1_u64 << attempt)));
