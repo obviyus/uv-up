@@ -285,7 +285,10 @@ impl App {
         }
 
         let scroll = vertical_scroll_offset(selected_line, lines.len(), usize::from(area.height));
-        frame.render_widget(Paragraph::new(Text::from(lines)).scroll((scroll as u16, 0)), area);
+        frame.render_widget(
+            Paragraph::new(Text::from(lines)).scroll((scroll as u16, 0)),
+            area,
+        );
     }
 
     fn render_dependencies(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
@@ -585,13 +588,19 @@ fn move_index(current: usize, len: usize, delta: isize) -> usize {
     }
 }
 
-fn vertical_scroll_offset(selected_line: usize, total_lines: usize, viewport_height: usize) -> usize {
+fn vertical_scroll_offset(
+    selected_line: usize,
+    total_lines: usize,
+    viewport_height: usize,
+) -> usize {
     if viewport_height == 0 || total_lines <= viewport_height {
         return 0;
     }
 
     let max_scroll = total_lines - viewport_height;
-    selected_line.saturating_sub(viewport_height.saturating_sub(1)).min(max_scroll)
+    selected_line
+        .saturating_sub(viewport_height.saturating_sub(1))
+        .min(max_scroll)
 }
 
 fn render_dependency_line(
