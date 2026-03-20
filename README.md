@@ -4,7 +4,7 @@ An interactive TUI for updating dependencies in [uv](https://docs.astral.sh/uv/)
 
 Point it at a repo, pick what to update, and `uvlift` rewrites `pyproject.toml` and runs `uv lock` for you. If locking fails, it rolls back.
 
-![demo](assets/demo.jpg)
+![demo](https://raw.githubusercontent.com/obviyus/uvlift/master/assets/demo.jpg)
 
 ## Installation
 
