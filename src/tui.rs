@@ -624,12 +624,7 @@ fn render_dependency_line(
     } else {
         Color::Reset
     });
-    let latest_color = match &dependency.status {
-        DependencyStatus::UpdateAvailable(_) => Color::Green,
-        DependencyStatus::NotFound => Color::Red,
-        DependencyStatus::Unsupported(_) => Color::Yellow,
-        DependencyStatus::UpToDate => Color::DarkGray,
-    };
+    let update_color = dependency_status_color(&dependency.status);
 
     Line::from(vec![
         Span::styled(format!("{cursor} "), default_style),
@@ -643,26 +638,31 @@ fn render_dependency_line(
         ),
         Span::styled(
             format!(" {:target_width$}", target, target_width = target_width),
-            default_style.fg(if dependency.selectable() {
-                Color::Green
-            } else {
-                Color::DarkGray
-            }),
+            default_style.fg(update_color),
         ),
         Span::styled(
             format!(" {:latest_width$}", latest, latest_width = latest_width),
-            default_style.fg(latest_color),
+            default_style.fg(update_color),
         ),
         Span::styled(
             format!("  {}", dependency.status.label()),
-            default_style.fg(match &dependency.status {
-                DependencyStatus::UpdateAvailable(_) => Color::Green,
-                DependencyStatus::NotFound => Color::Red,
-                DependencyStatus::Unsupported(_) => Color::Yellow,
-                DependencyStatus::UpToDate => Color::DarkGray,
-            }),
+            default_style.fg(update_color),
         ),
     ])
+}
+
+fn dependency_status_color(status: &DependencyStatus) -> Color {
+    match status {
+        DependencyStatus::UpdateAvailable(change) => match change {
+            crate::model::ChangeKind::Patch => Color::Green,
+            crate::model::ChangeKind::Minor => Color::Yellow,
+            crate::model::ChangeKind::Major => Color::Red,
+            crate::model::ChangeKind::None => Color::DarkGray,
+        },
+        DependencyStatus::NotFound => Color::Red,
+        DependencyStatus::Unsupported(_) => Color::Yellow,
+        DependencyStatus::UpToDate => Color::DarkGray,
+    }
 }
 
 fn section_title(section: &DependencySection) -> String {
